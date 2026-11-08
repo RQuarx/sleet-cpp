@@ -1,0 +1,1 @@
+widget_src = files('layout.cc', 'node.cc')
