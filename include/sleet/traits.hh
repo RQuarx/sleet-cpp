@@ -1,46 +1,38 @@
 #pragma once
+#include <concepts>
+#include <optional>
 #include <type_traits>
-#include <variant>
+#include <utility>
 
 #include <kei-utils/result.hh>
 
 
 namespace sleet::trait
 {
-    namespace _impl
-    {
-        template <typename Tp>
-        struct is_variant : std::false_type
-        {
-        };
-
-        template <typename... Ts>
-        struct is_variant<std::variant<Ts...>> : std::true_type
-        {
-        };
-
-        template <typename Tp>
-        inline constexpr bool is_variant_v = is_variant<Tp>::value;
-
-        template <typename Tp>
-        concept variant_type = is_variant_v<std::remove_cv_t<Tp>>;
-    }
-
-
+    /// A function that produces the initial state and the first message.
     template <typename Fn, typename State, typename Message>
-    concept boot_fn = requires {
-        { Fn() } noexcept -> std::same_as<kei::result<std::pair<State, Message>>>;
-    } and _impl::is_variant_v<Message>;
+    concept boot_fn
+        = std::invocable<Fn>
+      and std::same_as<std::invoke_result_t<Fn>, kei::result<std::pair<State, Message>>>;
 
 
-    template <typename Fn, typename State, typename Message>
-    concept update_fn = requires(State &state, const Message &message) {
-        { Fn(state, message) } noexcept -> std::same_as<kei::result<>>;
-    } and _impl::is_variant_v<Message>;
+    /// A function that applies a message to the state and may emit more messages.
+    template <typename Fn, typename State, typename Message, typename Emitter>
+    concept update_fn
+        = std::invocable<Fn, State &, const Message &, const Emitter &>
+      and std::same_as<std::invoke_result_t<Fn, State &, const Message &, const Emitter &>,
+                       kei::result<>>;
 
 
-    // template <typename Fn, typename State, typename Scene>
-    // concept view_fn = requires(const State &state) {
-    //     { Fn(state) } noexcept -> std::derived_from<widget::container>;
-    // };
+    /// A function that maps a framework event to an optional message.
+    template <typename Fn, typename Event, typename Message>
+    concept event_fn
+        = std::invocable<Fn, const Event &>
+      and std::convertible_to<std::invoke_result_t<Fn, const Event &>, std::optional<Message>>;
+
+
+    /// A function polled by the runtime to produce messages from external sources.
+    template <typename Fn, typename Message>
+    concept subscription_fn = std::invocable<Fn>
+                          and std::convertible_to<std::invoke_result_t<Fn>, std::optional<Message>>;
 }

@@ -1,4 +1,7 @@
-src = files('widgets.cc')
+src = files('widgets.cc', 'render_context.cc')
 
 subdir('widget')
 src += widget_src
+
+subdir('text')
+src += text_src

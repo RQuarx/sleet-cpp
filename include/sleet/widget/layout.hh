@@ -1,30 +1,59 @@
 #pragma once
 #include <functional>
+#include <optional>
+#include <string_view>
+#include <unordered_map>
 
 #include "sleet/math/rect.hh"
-#include "sleet/widget/id.hh"
+#include "sleet/math/vec2.hh"
 #include "sleet/widget/node.hh"
 
 
 namespace sleet::widget
 {
-    /// A function used by @ref calculate_layout to get text sizes.
-    ///
-    /// ### Parameters
-    /// - `std::string_view text`
-    /// - `font_spec font`
-    /// - `std::optional<float> width_limit`
-    ///
-    /// ### Returns
-    /// `kei::result<math::vec2>`
+    /// Measures text for \c calculate_layout. \c text is the string to measure,
+    /// \c font selects the face and style, and \c width_limit asks for wrapping
+    /// when it has a value. The result is the text size in logical pixels,
+    /// including any line wrapping.
     using text_measurer = std::function<
-        auto(std::string_view, font_spec, std::optional<float>)->kei::result<math::vec2>>;
+        auto(std::string_view, const font_spec &, std::optional<float>)->kei::result<math::vec2>>;
+
+
+    struct layout_result
+    {
+        math::rect root;
+
+        std::unordered_map<widget_id, math::rect> rects;
+
+
+        [[nodiscard]]
+        auto find(const widget_id &id) const noexcept -> const math::rect *
+        {
+            const auto it = rects.find(id);
+            return it == rects.end() ? nullptr : &it->second;
+        }
+
+        [[nodiscard]]
+        auto find(std::string_view id) const -> const math::rect *
+        { return find(widget_id { std::string { id } }); }
+
+        [[nodiscard]]
+        auto find(const char *id) const -> const math::rect *
+        { return id == nullptr ? nullptr : find(std::string_view { id }); }
+    };
 
 
     /// Calculates the layout of the widget nodes.
     ///
-    /// @note `root` must be finalized first before this function is called.
+    /// \param root The finalized root node.
+    /// \param measure_text The callback used to measure text.
+    /// \param viewport The size of the root content box. A root with \c fit
+    /// sizing uses its intrinsic size, while a root with \c grow or \c fill
+    /// sizing fills the viewport.
+    /// \return The resolved layout, or an error.
+    /// \pre \p root must be finalized before calling this function.
     [[nodiscard]]
-    auto calculate_layout(const _impl::node_data &root, const text_measurer &text_measurer) noexcept
-        -> kei::result<std::unordered_map<std::string_view, math::rect>>;
+    auto calculate_layout(const node_data     &root,
+                          const text_measurer &measure_text,
+                          math::vec2           viewport) -> kei::result<layout_result>;
 }

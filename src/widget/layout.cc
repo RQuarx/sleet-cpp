@@ -1,369 +1,834 @@
 #include <algorithm>
-#include <limits>
-#include <optional>
+#include <cmath>
 #include <ranges>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "sleet/widget/layout.hh"
 
 
 namespace
 {
+    using sleet::math::edge_insets;
     using sleet::math::rect;
     using sleet::math::vec2;
-    using sleet::math::vec4;
-    using sleet::widget::node_kind;
+    using sleet::widget::align;
+    using sleet::widget::font_spec;
+    using sleet::widget::justify;
+    using sleet::widget::node_data;
     using sleet::widget::sizing;
     using sleet::widget::text_measurer;
-    using sleet::widget::_impl::node_data;
 
 
-    /// Tolerance used when comparing accumulated float sizes.
-    constexpr auto epsilon = std::numeric_limits<float>::epsilon();
-
-
-    struct measured
-    {
-        static constexpr auto uninitialized = std::numeric_limits<float>::quiet_NaN();
-
-
-        std::vector<measured> children;
-
-        measured *parent = nullptr;
-
-        /// Content based preferred size (padding included). Fixed sizes override it.
-        vec2 intrinsic_size { uninitialized };
-
-        /// Final size. Starts at the intrinsic size, `grow` nodes are then expanded/shrunk.
-        vec2 size { uninitialized };
-        vec2 pos { uninitialized };
-
-
-        static auto build_from_widget_node(const node_data &widget) -> measured
-        {
-            measured m;
-            m.children.reserve(widget.children.size());
-
-            for (const auto &child : widget.children)
-                m.children.emplace_back(measured::build_from_widget_node(child));
-
-            return m;
-        }
-
-        void set_parents(measured *p = nullptr)
-        {
-            parent = p;
-            for (auto &child : children) child.set_parents(this);
-        }
-
-        [[nodiscard]] auto to_rect() const noexcept -> rect { return { pos, size }; }
-    };
-
-
-    enum axis : std::uint8_t
+    enum class axis : std::uint8_t
     {
         width  = 0,
         height = 1,
     };
 
-    auto combine_axis(vec4 v, axis a) noexcept -> float
-    { return a == axis::width ? v.begin + v.end : v.top + v.bottom; }
 
-    auto leading_axis(vec4 v, axis a) noexcept -> float
-    { return a == axis::width ? v.begin : v.top; }
+    [[nodiscard]]
+    auto clamp0(float value) noexcept -> float
+    {
+        if (!std::isfinite(value)) return 0.F;
+        return value < 0.F ? 0.F : value;
+    }
 
-    auto is_stacked_axis(const node_data &node, axis a) noexcept -> bool
+    [[nodiscard]]
+    constexpr auto other(axis a) noexcept -> axis
+    { return a == axis::width ? axis::height : axis::width; }
+
+    [[nodiscard]]
+    constexpr auto size_axis(vec2 value, axis a) noexcept -> float
+    { return a == axis::width ? value.x : value.y; }
+
+    [[nodiscard]]
+    constexpr auto margin_axis(const edge_insets &m, axis a) noexcept -> float
+    { return a == axis::width ? m.horizontal() : m.vertical(); }
+
+    [[nodiscard]]
+    constexpr auto padding_axis(const edge_insets &p, axis a) noexcept -> float
+    { return a == axis::width ? p.horizontal() : p.vertical(); }
+
+    [[nodiscard]]
+    constexpr auto leading_margin(const edge_insets &m, axis a) noexcept -> float
+    { return a == axis::width ? m.left : m.top; }
+
+    [[nodiscard]]
+    constexpr auto trailing_margin(const edge_insets &m, axis a) noexcept -> float
+    { return a == axis::width ? m.right : m.bottom; }
+
+    [[nodiscard]]
+    constexpr auto is_stacked(const node_data &node, axis a) noexcept -> bool
     { return (node.is_row() and a == axis::width) or (node.is_column() and a == axis::height); }
 
-
-#pragma region
-
-    /// Extent of the children along axis `a`, based on their intrinsic sizes.
-    auto measure_child_content(const node_data &node, const measured &measure_node, axis a) noexcept
-        -> float
+    [[nodiscard]]
+    auto align_offset(align alignment, float free_space) noexcept -> float
     {
-        float content    = 0;
-        bool  is_stacked = is_stacked_axis(node, a);
+        const auto free = std::max(0.F, free_space);
 
-        for (const auto &[w_child, m_child] : std::views::zip(node.children, measure_node.children))
+        switch (alignment)
         {
-            float extent = m_child.intrinsic_size.data[a] + combine_axis(w_child.margin, a);
-            content      = is_stacked ? content + extent : std::max(content, extent);
+        case align::start:  return 0.F;
+        case align::center: return free / 2.F;
+        case align::end:    return free;
         }
 
-        if (is_stacked and !node.children.empty())
-            content += static_cast<float>(node.children.size() - 1) * node.gap;
-        return content;
+        return 0.F;
     }
 
-
-    /// Computes this node's own intrinsic size and initialises `size` with it.
-    ///
-    /// @note The children must already be measured.
-    auto apply_intrinsic_size(const node_data     &node,
-                              measured            &measure_node,
-                              const text_measurer &text_measurer) noexcept -> kei::result<>
+    struct measured
     {
-        if (node.is_text())
-        {
-            auto res = text_measurer(node.text, node.font, std::nullopt)
-                           .and_then(
-                               [&](vec2 text_size)
-                               {
-                                   measure_node.intrinsic_size = text_size;
-                                   for (auto a : { axis::width, axis::height })
-                                       measure_node.intrinsic_size.data[a]
-                                           += combine_axis(node.padding, a);
-                                   return kei::result<> {};
-                               });
-            if (!res) return res;
-        }
-        else
-        {
-            for (auto a : { axis::width, axis::height })
-                measure_node.intrinsic_size.data[a]
-                    = combine_axis(node.padding, a) + measure_child_content(node, measure_node, a);
-        }
+        const node_data      *widget = nullptr;
+        std::vector<measured> children;
 
-        /* A fixed size always wins (this also applies to text nodes). */
-        for (auto a : { axis::width, axis::height })
-            if (node.size.data[a].is_fixed())
-                measure_node.intrinsic_size.data[a] = node.size.data[a].get_fixed_size();
-
-        measure_node.size = measure_node.intrinsic_size;
-        return {};
-    }
-
-
-    auto measure_intrinsic(const node_data     &node,
-                           measured            &measure_node,
-                           const text_measurer &text_measurer) noexcept -> kei::result<>
-    {
-        for (const auto &[w_child, m_child] : std::views::zip(node.children, measure_node.children))
-        {
-            for (auto a : { axis::width, axis::height })
-                if (node.size.data[a].is_fit() and w_child.size.data[a].is_grow())
-                    return kei::error { "A `fit` widget ({}) cannot contain a `grow` child ({}).",
-                                        node.id.view(), w_child.id.view() }
-                        .unexpected();
-
-            if (auto res = measure_intrinsic(w_child, m_child, text_measurer); !res) return res;
-        }
-
-        return apply_intrinsic_size(node, measure_node, text_measurer);
-    }
-#pragma endregion
-
-#pragma region
-    struct grow_slot
-    {
-        measured *node;
-
-        /// smallest size this child may be shrunk to
-        float floor;
+        vec2 intrinsic { 0.F, 0.F };
+        vec2 size { 0.F, 0.F };
+        vec2 position { 0.F, 0.F };
     };
 
 
-    /// Distributes `remaining` (> 0) over the slots, always raising the smallest ones first
-    /// until they reach the next level, so sizes end up levelled out.
-    void expand_slots(std::vector<grow_slot> &slots, float remaining, axis a) noexcept
+    /// Moves an arranged subtree without measuring it again.
+    void translate(measured &node, vec2 delta) noexcept
     {
-        while (remaining > epsilon)
-        {
-            float smallest = std::numeric_limits<float>::infinity();
-            for (const auto &s : slots) smallest = std::min(smallest, s.node->size.data[a]);
-
-            float       next  = std::numeric_limits<float>::infinity();
-            std::size_t count = 0;
-            for (const auto &s : slots)
-            {
-                float size = s.node->size.data[a];
-                if (size - smallest <= epsilon)
-                    count++;
-                else
-                    next = std::min(next, size);
-            }
-
-            float step = std::min(next - smallest, remaining / static_cast<float>(count));
-
-            for (auto &s : slots)
-                if (s.node->size.data[a] - smallest <= epsilon) s.node->size.data[a] += step;
-
-            remaining -= step * static_cast<float>(count);
-        }
+        node.position += delta;
+        for (auto &child : node.children) translate(child, delta);
     }
 
 
-    /// Removes `need` (> 0) from the slots, always cutting the largest ones first, and never
-    /// going below a slot's floor. If every slot is at its floor the rest overflows.
-    void shrink_slots(std::vector<grow_slot> &slots, float need, axis a) noexcept
+    [[nodiscard]]
+    auto build_measured(const node_data &widget) -> measured
     {
-        constexpr auto inf = std::numeric_limits<float>::infinity();
+        measured result;
+        result.widget = &widget;
+        result.children.reserve(widget.children.size());
 
-        auto shrinkable
-            = [a](const grow_slot &s) { return s.node->size.data[a] - s.floor > epsilon; };
+        for (const auto &child : widget.children)
+            result.children.emplace_back(build_measured(child));
 
-        while (need > epsilon)
-        {
-            float largest = -inf;
-            for (const auto &s : slots)
-                if (shrinkable(s)) largest = std::max(largest, s.node->size.data[a]);
-
-            if (largest == -inf) return; /* nothing left to shrink */
-
-            float       next        = -inf;
-            float       group_floor = -inf;
-            std::size_t count       = 0;
-            for (const auto &s : slots)
-            {
-                if (!shrinkable(s)) continue;
-
-                float size = s.node->size.data[a];
-                if (largest - size <= epsilon)
-                {
-                    count++;
-                    group_floor = std::max(group_floor, s.floor);
-                }
-                else
-                    next = std::max(next, size);
-            }
-
-            float target = std::max(next, group_floor);
-            float step   = std::min(largest - target, need / static_cast<float>(count));
-
-            for (auto &s : slots)
-                if (shrinkable(s) and largest - s.node->size.data[a] <= epsilon)
-                    s.node->size.data[a] = std::max(s.node->size.data[a] - step, s.floor);
-
-            need -= step * static_cast<float>(count);
-        }
+        return result;
     }
 
 
-    auto grow_unstacked_children(const node_data &node, measured &m, axis a) noexcept
+    [[nodiscard]]
+    auto measure_text_node(const node_data     &node,
+                           const text_measurer &measure,
+                           std::optional<float> width_limit) -> kei::result<vec2>
+    {
+        auto content = measure(node.text, node.font, width_limit);
+        if (!content) return std::move(content.error()).unexpected();
+
+        vec2 outer {
+            content->x + node.padding.horizontal(),
+            content->y + node.padding.vertical(),
+        };
+
+        if (node.size.x.is_fixed()) outer.x = node.size.x.get_fixed_size();
+        if (node.size.y.is_fixed()) outer.y = node.size.y.get_fixed_size();
+
+        return vec2 { clamp0(outer.x), clamp0(outer.y) };
+    }
+
+
+    [[nodiscard]]
+    auto measure_intrinsic(const node_data &node, measured &result, const text_measurer &measure)
         -> kei::result<>
     {
-        const float available = m.size.data[a] - combine_axis(node.padding, a);
+        result.widget = &node;
 
-        for (const auto &[child, measured_child] : std::views::zip(node.children, m.children))
+        if (!node.visible)
         {
-            if (!child.size.data[a].is_grow()) continue;
-            if (node.size.data[a].is_fit())
-                return kei::error {
-                    "A `grow` widget ({}) has a parent ({}) whose sizing mode is `fit`.",
-                    child.id.view(), node.id.view()
-                }
-                    .unexpected();
+            result.children.clear();
+            result.intrinsic = { 0.F, 0.F };
+            return {};
+        }
 
-            measured_child.size.data[a] = std::max(0.F, available - combine_axis(child.margin, a));
+        result.children.resize(node.children.size());
+
+        for (std::size_t i = 0; i < node.children.size(); i++)
+            if (auto res = measure_intrinsic(node.children[i], result.children[i], measure); !res)
+                return res;
+
+        if (node.is_text())
+        {
+            std::optional<float> limit;
+            if (node.size.x.is_fixed())
+                limit = clamp0(node.size.x.get_fixed_size() - node.padding.horizontal());
+
+            auto size = measure_text_node(node, measure, limit);
+            if (!size) return std::move(size.error()).unexpected();
+
+            result.intrinsic = *size;
+            return {};
+        }
+
+        for (const auto a : { axis::width, axis::height })
+        {
+            float content = 0.F;
+
+            std::size_t visible_count = 0;
+
+            for (std::size_t i = 0; i < node.children.size(); i++)
+            {
+                const auto &child = node.children[i];
+                if (!child.visible) continue;
+                visible_count++;
+
+                if (is_stacked(node, a))
+                    content += result.children[i].intrinsic[static_cast<std::size_t>(a)]
+                             + margin_axis(child.margin, a);
+                else
+                    content = std::max(content,
+                                       result.children[i].intrinsic[static_cast<std::size_t>(a)]
+                                           + margin_axis(child.margin, a));
+            }
+
+            if (is_stacked(node, a) and visible_count > 1)
+                content += std::max(0.F, node.gap) * static_cast<float>(visible_count - 1);
+
+            content += padding_axis(node.padding, a);
+
+            if (node.size[static_cast<std::size_t>(a)].is_fixed())
+                content = node.size[static_cast<std::size_t>(a)].get_fixed_size();
+
+            result.intrinsic[static_cast<std::size_t>(a)] = clamp0(content);
         }
 
         return {};
     }
 
 
-    void grow_stacked_children(const node_data &node, measured &measure_node, axis a) noexcept
+    [[nodiscard]]
+    auto remeasure_text(const node_data     &node,
+                        vec2                &size,
+                        const text_measurer &measure,
+                        std::optional<float> available_width) -> kei::result<>
     {
-        std::vector<grow_slot> slots;
+        if (!node.is_text()) return {};
 
-        /* free space = container - padding - gaps - every child's *current* size and margin */
-        float remaining = measure_node.size.data[a] - combine_axis(node.padding, a);
+        const bool width_fit  = node.size.x.is_fit();
+        const bool height_fit = node.size.y.is_fit();
+        if (!width_fit and !height_fit) return {};
 
-        for (const auto &[child, measured_child] :
-             std::views::zip(node.children, measure_node.children))
-        {
-            remaining -= combine_axis(child.margin, a) + measured_child.size.data[a];
+        std::optional<float> limit;
+        if (!width_fit)
+            limit = clamp0(size.x - node.padding.horizontal());
+        else if (available_width)
+            limit = clamp0(*available_width - node.padding.horizontal());
 
-            if (child.size.data[a].is_grow())
-                slots.push_back({ &measured_child, combine_axis(child.padding, a) });
-        }
+        auto measured_size = measure(node.text, node.font, limit);
+        if (!measured_size) return std::move(measured_size.error()).unexpected();
 
-        if (node.children.size() > 1)
-            remaining -= static_cast<float>(node.children.size() - 1) * node.gap;
+        if (width_fit) size.x = clamp0(measured_size->x + node.padding.horizontal());
+        if (height_fit) size.y = clamp0(measured_size->y + node.padding.vertical());
 
-        if (slots.empty()) return;
-
-        if (remaining > epsilon)
-            expand_slots(slots, remaining, a);
-        else if (remaining < -epsilon)
-            shrink_slots(slots, -remaining, a);
+        return {};
     }
 
 
-    auto distribute_space(const node_data &node, measured &m) noexcept -> kei::result<>
+    [[nodiscard]]
+    auto arrange(const node_data     &node,
+                 measured            &result,
+                 vec2                 position,
+                 vec2                 size,
+                 const text_measurer &measure) -> kei::result<>;
+
+    class stack_arrangement
     {
-        for (auto a : { axis::width, axis::height })
-            if (is_stacked_axis(node, a)) { grow_stacked_children(node, m, a); }
+    public:
+        stack_arrangement(const node_data     &node,
+                          measured            &result,
+                          vec2                 content_position,
+                          vec2                 content_size,
+                          const text_measurer &measure)
+            : m_node { node }, m_result { result }, m_content_position { content_position },
+              m_content_size { content_size }, m_measure { measure },
+              m_main { node.is_row() ? axis::width : axis::height }, m_cross { other(m_main) },
+              m_count { node.children.size() },
+              m_main_fit { node.size[static_cast<std::size_t>(m_main)].is_fit() },
+              m_cross_fit { node.size[static_cast<std::size_t>(m_cross)].is_fit() }
+        {
+        }
+
+
+        auto run() -> kei::result<>
+        {
+            collect_sizes();
+            if (auto res = remeasure_cross_axis(); !res) return res;
+            distribute_main_space();
+            if (auto res = remeasure_main_axis(); !res) return res;
+            update_fit_axes();
+            if (auto res = place_children(false); !res) return res;
+            update_resolved_axes();
+            return place_children(true);
+        }
+
+
+    private:
+        const node_data     &m_node;
+        measured            &m_result;
+        vec2                 m_content_position;
+        vec2                 m_content_size;
+        const text_measurer &m_measure;
+        axis                 m_main;
+        axis                 m_cross;
+        std::size_t          m_count;
+        bool                 m_main_fit;
+        bool                 m_cross_fit;
+        std::size_t          m_visible_count = 0;
+        float                m_gap_total     = 0.F;
+        std::vector<vec2>    m_sizes;
+        std::vector<float>   m_weights;
+
+
+        void collect_sizes()
+        {
+            m_sizes.resize(m_count);
+            m_weights.assign(m_count, 0.F);
+
+            for (std::size_t i = 0; i < m_count; i++)
+            {
+                const auto &child = m_node.children[i];
+                m_sizes[i]        = m_result.children[i].intrinsic;
+
+                if (!child.visible) continue;
+                m_visible_count++;
+
+                const auto main_size = child.size[static_cast<std::size_t>(m_main)];
+                if (main_size.is_fixed())
+                    m_sizes[i][static_cast<std::size_t>(m_main)] = main_size.get_fixed_size();
+
+                const auto cross_size = child.size[static_cast<std::size_t>(m_cross)];
+                if (cross_size.is_fixed())
+                    m_sizes[i][static_cast<std::size_t>(m_cross)] = cross_size.get_fixed_size();
+                else if (!m_cross_fit and cross_size.is_fill())
+                    m_sizes[i][static_cast<std::size_t>(m_cross)] = clamp0(
+                        size_axis(m_content_size, m_cross) - margin_axis(child.margin, m_cross));
+
+                if (!m_main_fit and (main_size.is_grow() or main_size.is_fill()))
+                    m_weights[i] = std::max(0.F, child.flex);
+            }
+
+            m_gap_total = m_visible_count > 1
+                            ? std::max(0.F, m_node.gap) * static_cast<float>(m_visible_count - 1)
+                            : 0.F;
+        }
+
+
+        auto remeasure_cross_axis() -> kei::result<>
+        {
+            if (!m_node.is_column()) return {};
+
+            for (std::size_t i = 0; i < m_count; i++)
+            {
+                const auto &child = m_node.children[i];
+                if (!child.visible) continue;
+
+                const auto available_width
+                    = m_cross_fit
+                        ? std::optional<float> {}
+                        : std::optional<float> { clamp0(size_axis(m_content_size, m_cross)
+                                                        - margin_axis(child.margin, m_cross)) };
+
+                if (auto res = remeasure_text(child, m_sizes[i], m_measure, available_width); !res)
+                    return res;
+            }
+
+            return {};
+        }
+
+
+        [[nodiscard]]
+        auto occupied() const noexcept -> float
+        {
+            float result = m_gap_total;
+            for (std::size_t i = 0; i < m_count; i++)
+                if (m_node.children[i].visible)
+                    result += m_sizes[i][static_cast<std::size_t>(m_main)]
+                            + margin_axis(m_node.children[i].margin, m_main);
+            return result;
+        }
+
+
+        void distribute_main_space()
+        {
+            if (m_main_fit) return;
+
+            const auto free_space = size_axis(m_content_size, m_main) - occupied();
+
+            float weight_sum = 0.F;
+            for (const auto weight : m_weights) weight_sum += weight;
+
+            if (free_space > 0.F and weight_sum > 0.F)
+            {
+                for (std::size_t i = 0; i < m_count; i++)
+                    if (m_weights[i] > 0.F)
+                        m_sizes[i][static_cast<std::size_t>(m_main)]
+                            += free_space * m_weights[i] / weight_sum;
+                return;
+            }
+
+            if (free_space >= 0.F) return;
+
+            float reducible = 0.F;
+            for (std::size_t i = 0; i < m_count; i++)
+                if (m_weights[i] > 0.F) reducible += m_sizes[i][static_cast<std::size_t>(m_main)];
+
+            if (reducible <= 0.F) return;
+
+            const auto factor = clamp0(1.F + (free_space / reducible));
+            for (std::size_t i = 0; i < m_count; i++)
+                if (m_weights[i] > 0.F) m_sizes[i][static_cast<std::size_t>(m_main)] *= factor;
+        }
+
+
+        auto remeasure_main_axis() -> kei::result<>
+        {
+            if (!m_node.is_row()) return {};
+
+            for (std::size_t i = 0; i < m_count; i++)
+                if (m_node.children[i].visible)
+                    if (auto res
+                        = remeasure_text(m_node.children[i], m_sizes[i], m_measure, std::nullopt);
+                        !res)
+                        return res;
+
+            return {};
+        }
+
+
+        void update_fit_axes()
+        {
+            if (m_main_fit)
+            {
+                float content = m_gap_total;
+                for (std::size_t i = 0; i < m_count; i++)
+                    if (m_node.children[i].visible)
+                        content += m_sizes[i][static_cast<std::size_t>(m_main)]
+                                 + margin_axis(m_node.children[i].margin, m_main);
+
+                m_content_size[static_cast<std::size_t>(m_main)] = content;
+                m_result.size[static_cast<std::size_t>(m_main)]
+                    = clamp0(content + padding_axis(m_node.padding, m_main));
+            }
+
+            if (!m_cross_fit) return;
+
+            float content = 0.F;
+            for (std::size_t i = 0; i < m_count; i++)
+                if (m_node.children[i].visible)
+                    content
+                        = std::max(content, m_sizes[i][static_cast<std::size_t>(m_cross)]
+                                                + margin_axis(m_node.children[i].margin, m_cross));
+
+            m_content_size[static_cast<std::size_t>(m_cross)] = content;
+            m_result.size[static_cast<std::size_t>(m_cross)]
+                = clamp0(content + padding_axis(m_node.padding, m_cross));
+        }
+
+
+        [[nodiscard]]
+        auto justify_offsets(float occupied_size) const noexcept -> std::pair<float, float>
+        {
+            const auto free_space
+                = m_main_fit ? 0.F : size_axis(m_content_size, m_main) - occupied_size;
+
+            switch (m_node.main_axis)
+            {
+            case justify::start:  return { 0.F, 0.F };
+            case justify::center: return { std::max(0.F, free_space) / 2.F, 0.F };
+            case justify::end:    return { std::max(0.F, free_space), 0.F };
+            case justify::between:
+                if (m_visible_count > 1)
+                    return { 0.F,
+                             std::max(0.F, free_space) / static_cast<float>(m_visible_count - 1) };
+                return { 0.F, 0.F };
+            }
+
+            return { 0.F, 0.F };
+        }
+
+
+        [[nodiscard]]
+        auto child_position(std::size_t index, vec2 child_size, float cursor) const noexcept -> vec2
+        {
+            const auto &child       = m_node.children[index];
+            const auto  cross_space = size_axis(m_content_size, m_cross)
+                                    - size_axis(child_size, m_cross)
+                                    - margin_axis(child.margin, m_cross);
+            const auto  cross_align
+                = child.align_self.value_or(m_node.alignment[static_cast<std::size_t>(m_cross)]);
+
+            vec2 position {};
+            position[static_cast<std::size_t>(m_main)]
+                = cursor + leading_margin(child.margin, m_main);
+            position[static_cast<std::size_t>(m_cross)] = size_axis(m_content_position, m_cross)
+                                                        + leading_margin(child.margin, m_cross)
+                                                        + align_offset(cross_align, cross_space);
+            return position;
+        }
+
+
+        auto place_children(bool final_pass) -> kei::result<>
+        {
+            float occupied_size = 0.F;
+            if (final_pass)
+            {
+                occupied_size = m_gap_total;
+                for (std::size_t i = 0; i < m_count; i++)
+                    if (m_node.children[i].visible)
+                        occupied_size += m_result.children[i].size[static_cast<std::size_t>(m_main)]
+                                       + margin_axis(m_node.children[i].margin, m_main);
+            }
             else
+                occupied_size = occupied();
+
+            const auto [offset, extra_gap] = justify_offsets(occupied_size);
+            float cursor                   = size_axis(m_content_position, m_main) + offset;
+
+            for (std::size_t i = 0; i < m_count; i++)
             {
-                if (auto res = grow_unstacked_children(node, m, a); !res) return res;
+                const auto &child = m_node.children[i];
+                if (!child.visible) continue;
+
+                const auto size     = final_pass ? m_result.children[i].size : m_sizes[i];
+                const auto position = child_position(i, size, cursor);
+
+                if (final_pass)
+                    translate(m_result.children[i], position - m_result.children[i].position);
+                else if (auto res
+                         = arrange(child, m_result.children[i], position, m_sizes[i], m_measure);
+                         !res)
+                    return res;
+
+                cursor += leading_margin(child.margin, m_main) + size_axis(size, m_main)
+                        + trailing_margin(child.margin, m_main) + std::max(0.F, m_node.gap)
+                        + extra_gap;
             }
 
-        for (const auto &[child, measured_child] : std::views::zip(node.children, m.children))
-            if (auto res = distribute_space(child, measured_child); !res) return res;
-
-        return {};
-    }
-#pragma endregion
-
-
-    /// Top-left aligned placement: children are stacked along the main axis (with gaps) and
-    /// start at the padding edge on the cross axis.
-    void place_children(const node_data &node, measured &m)
-    {
-        for (auto a : { axis::width, axis::height })
-        {
-            const bool stacked = is_stacked_axis(node, a);
-            float      cursor  = m.pos.data[a] + leading_axis(node.padding, a);
-
-            for (const auto &[child, measured_child] : std::views::zip(node.children, m.children))
-            {
-                const float lead  = leading_axis(child.margin, a);
-                const float trail = combine_axis(child.margin, a) - lead;
-
-                measured_child.pos.data[a] = cursor + lead;
-
-                if (stacked) cursor += lead + measured_child.size.data[a] + trail + node.gap;
-            }
+            return {};
         }
 
-        for (const auto &[child, measured_child] : std::views::zip(node.children, m.children))
-            place_children(child, measured_child);
+
+        void update_resolved_axes()
+        {
+            if (!m_main_fit and !m_cross_fit) return;
+
+            float final_main  = m_gap_total;
+            float final_cross = 0.F;
+
+            for (std::size_t i = 0; i < m_count; i++)
+                if (m_node.children[i].visible)
+                {
+                    final_main += m_result.children[i].size[static_cast<std::size_t>(m_main)]
+                                + margin_axis(m_node.children[i].margin, m_main);
+                    final_cross = std::max(
+                        final_cross, m_result.children[i].size[static_cast<std::size_t>(m_cross)]
+                                         + margin_axis(m_node.children[i].margin, m_cross));
+                }
+
+            if (m_main_fit)
+            {
+                m_content_size[static_cast<std::size_t>(m_main)] = final_main;
+                m_result.size[static_cast<std::size_t>(m_main)]
+                    = clamp0(final_main + padding_axis(m_node.padding, m_main));
+            }
+
+            if (m_cross_fit)
+            {
+                m_content_size[static_cast<std::size_t>(m_cross)] = final_cross;
+                m_result.size[static_cast<std::size_t>(m_cross)]
+                    = clamp0(final_cross + padding_axis(m_node.padding, m_cross));
+            }
+        }
+    };
+
+
+    [[nodiscard]]
+    auto arrange_row_or_column(const node_data     &node,
+                               measured            &result,
+                               vec2                 content_position,
+                               vec2                 content_size,
+                               const text_measurer &measure) -> kei::result<>
+    { return stack_arrangement { node, result, content_position, content_size, measure }.run(); }
+
+
+    class box_arrangement
+    {
+    public:
+        box_arrangement(const node_data     &node,
+                        measured            &result,
+                        vec2                 content_position,
+                        vec2                 content_size,
+                        const text_measurer &measure)
+            : m_node { node }, m_result { result }, m_content_position { content_position },
+              m_content_size { content_size }, m_measure { measure },
+              m_count { node.children.size() }, m_width_fit { node.size.x.is_fit() },
+              m_height_fit { node.size.y.is_fit() }
+        {
+        }
+
+
+        auto run() -> kei::result<>
+        {
+            if (auto res = collect_sizes(); !res) return res;
+            update_fit_axes();
+            if (auto res = place_children(false); !res) return res;
+            update_resolved_axes();
+            return place_children(true);
+        }
+
+
+    private:
+        const node_data     &m_node;
+        measured            &m_result;
+        vec2                 m_content_position;
+        vec2                 m_content_size;
+        const text_measurer &m_measure;
+        std::size_t          m_count;
+        bool                 m_width_fit;
+        bool                 m_height_fit;
+        std::vector<vec2>    m_sizes;
+
+
+        auto collect_sizes() -> kei::result<>
+        {
+            m_sizes.resize(m_count);
+
+            for (std::size_t i = 0; i < m_count; i++)
+            {
+                const auto &child = m_node.children[i];
+                if (!child.visible) continue;
+
+                vec2 size = m_result.children[i].intrinsic;
+
+                for (const auto a : { axis::width, axis::height })
+                {
+                    const auto child_size = child.size[static_cast<std::size_t>(a)];
+                    if (child_size.is_fixed())
+                        size[static_cast<std::size_t>(a)] = child_size.get_fixed_size();
+                    else if (!m_node.size[static_cast<std::size_t>(a)].is_fit()
+                             and (child_size.is_fill() or child_size.is_grow()))
+                        size[static_cast<std::size_t>(a)]
+                            = clamp0(size_axis(m_content_size, a) - margin_axis(child.margin, a));
+                }
+
+                const auto available_width
+                    = m_width_fit
+                        ? std::optional<float> {}
+                        : std::optional<float> { clamp0(m_content_size.x
+                                                        - margin_axis(child.margin, axis::width)) };
+
+                if (auto res = remeasure_text(child, size, m_measure, available_width); !res)
+                    return res;
+
+                m_sizes[i] = size;
+            }
+
+            return {};
+        }
+
+
+        void update_fit_axes()
+        {
+            if (m_width_fit)
+            {
+                float content = 0.F;
+                for (std::size_t i = 0; i < m_count; i++)
+                    if (m_node.children[i].visible)
+                        content = std::max(
+                            content,
+                            m_sizes[i].x + margin_axis(m_node.children[i].margin, axis::width));
+
+                m_content_size.x = content;
+                m_result.size.x  = clamp0(content + m_node.padding.horizontal());
+            }
+
+            if (!m_height_fit) return;
+
+            float content = 0.F;
+            for (std::size_t i = 0; i < m_count; i++)
+                if (m_node.children[i].visible)
+                    content = std::max(content,
+                                       m_sizes[i].y
+                                           + margin_axis(m_node.children[i].margin, axis::height));
+
+            m_content_size.y = content;
+            m_result.size.y  = clamp0(content + m_node.padding.vertical());
+        }
+
+
+        [[nodiscard]]
+        auto child_position(std::size_t index, vec2 child_size) const noexcept -> vec2
+        {
+            const auto &child = m_node.children[index];
+            const auto  x_space
+                = m_content_size.x - child_size.x - margin_axis(child.margin, axis::width);
+            const auto y_space
+                = m_content_size.y - child_size.y - margin_axis(child.margin, axis::height);
+
+            const auto horizontal = child.align_self.value_or(m_node.alignment.x);
+            const auto vertical   = child.align_self.value_or(m_node.alignment.y);
+
+            return {
+                m_content_position.x + child.margin.left + align_offset(horizontal, x_space),
+                m_content_position.y + child.margin.top + align_offset(vertical, y_space),
+            };
+        }
+
+
+        auto place_children(bool final_pass) -> kei::result<>
+        {
+            for (std::size_t i = 0; i < m_count; i++)
+            {
+                const auto &child = m_node.children[i];
+                if (!child.visible) continue;
+
+                const auto size     = final_pass ? m_result.children[i].size : m_sizes[i];
+                const auto position = child_position(i, size);
+
+                if (final_pass)
+                    translate(m_result.children[i], position - m_result.children[i].position);
+                else if (auto res
+                         = arrange(child, m_result.children[i], position, m_sizes[i], m_measure);
+                         !res)
+                    return res;
+            }
+
+            return {};
+        }
+
+
+        void update_resolved_axes()
+        {
+            if (!m_width_fit and !m_height_fit) return;
+
+            float final_width  = 0.F;
+            float final_height = 0.F;
+
+            for (std::size_t i = 0; i < m_count; i++)
+                if (m_node.children[i].visible)
+                {
+                    final_width = std::max(
+                        final_width, m_result.children[i].size.x
+                                         + margin_axis(m_node.children[i].margin, axis::width));
+                    final_height = std::max(
+                        final_height, m_result.children[i].size.y
+                                          + margin_axis(m_node.children[i].margin, axis::height));
+                }
+
+            if (m_width_fit)
+            {
+                m_content_size.x = final_width;
+                m_result.size.x  = clamp0(final_width + m_node.padding.horizontal());
+            }
+
+            if (m_height_fit)
+            {
+                m_content_size.y = final_height;
+                m_result.size.y  = clamp0(final_height + m_node.padding.vertical());
+            }
+        }
+    };
+
+
+    [[nodiscard]]
+    auto arrange_box(const node_data     &node,
+                     measured            &result,
+                     vec2                 content_position,
+                     vec2                 content_size,
+                     const text_measurer &measure) -> kei::result<>
+    { return box_arrangement { node, result, content_position, content_size, measure }.run(); }
+
+    auto arrange(const node_data     &node,
+                 measured            &result,
+                 vec2                 position,
+                 vec2                 size,
+                 const text_measurer &measure) -> kei::result<>
+    {
+        result.position = position;
+        result.size     = size;
+
+        if (!node.visible) return {};
+
+        if (node.is_text())
+        {
+            // Keep any width imposed by the parent. remeasure_text uses it as
+            // the wrap limit for fit-width text and ignores it for fill or fixed
+            // sizing.
+            if (auto res = remeasure_text(node, result.size, measure,
+                                          std::optional<float> { clamp0(result.size.x) });
+                !res)
+                return res;
+            return {};
+        }
+
+        if (node.children.empty()) return {};
+
+        const auto content_position
+            = vec2 { position.x + node.padding.left, position.y + node.padding.top };
+        const auto content_size = vec2 {
+            clamp0(size.x - node.padding.horizontal()),
+            clamp0(size.y - node.padding.vertical()),
+        };
+
+        if (node.is_row() or node.is_column())
+            return arrange_row_or_column(node, result, content_position, content_size, measure);
+
+        return arrange_box(node, result, content_position, content_size, measure);
     }
 
 
-    void fill_rects(std::unordered_map<std::string_view, rect> &rects,
-                    const node_data                            &node,
-                    const measured                             &m)
+    [[nodiscard]]
+    auto collect_rects(const node_data              &node,
+                       const measured               &result,
+                       sleet::widget::layout_result &out) -> kei::result<>
     {
-        rects.emplace(node.id.view(), m.to_rect());
+        if (!node.visible) return {};
 
-        for (const auto &[node_child, measured_child] : std::views::zip(node.children, m.children))
-            fill_rects(rects, node_child, measured_child);
+        if (!out.rects.try_emplace(node.id, rect { result.position, result.size }).second)
+            return sleet::error { "Duplicate widget id \"{}\".", node.id.view() }.unexpected();
+
+        for (std::size_t i = 0; i < node.children.size(); i++)
+            if (auto res = collect_rects(node.children[i], result.children[i], out); !res)
+                return res;
+
+        return {};
     }
 }
 
 
-auto sleet::widget::calculate_layout(const _impl::node_data &root,
-                                     const text_measurer    &text_measurer) noexcept
-    -> kei::result<std::unordered_map<std::string_view, math::rect>>
+auto sleet::widget::calculate_layout(const node_data     &root,
+                                     const text_measurer &measure,
+                                     math::vec2           viewport) -> kei::result<layout_result>
 {
-    auto measured_tree = measured::build_from_widget_node(root);
-    measured_tree.set_parents();
+    if (!measure) return sleet::error { "calculate_layout requires a text measurer." }.unexpected();
 
-    if (auto res = measure_intrinsic(root, measured_tree, text_measurer); !res)
+    auto measured_tree = build_measured(root);
+
+    if (auto res = measure_intrinsic(root, measured_tree, measure); !res)
         return std::move(res.error()).unexpected();
 
-    if (auto res = distribute_space(root, measured_tree); !res)
+    vec2 root_size = measured_tree.intrinsic;
+    for (const auto a : { axis::width, axis::height })
+    {
+        if (root.size[static_cast<std::size_t>(a)].is_fixed())
+            root_size[static_cast<std::size_t>(a)]
+                = root.size[static_cast<std::size_t>(a)].get_fixed_size();
+        else if (root.size[static_cast<std::size_t>(a)].is_grow()
+                 or root.size[static_cast<std::size_t>(a)].is_fill())
+            root_size[static_cast<std::size_t>(a)] = clamp0(viewport[static_cast<std::size_t>(a)]);
+    }
+
+    if (auto res = arrange(root, measured_tree, { 0.F, 0.F }, root_size, measure); !res)
         return std::move(res.error()).unexpected();
 
-    for (auto a : { axis::width, axis::height }) measured_tree.pos.data[a] = 0;
-    place_children(root, measured_tree);
+    layout_result out;
+    out.root = { measured_tree.position, measured_tree.size };
 
-    std::unordered_map<std::string_view, math::rect> res;
-    res.reserve(root.children_amount() + 1);
+    if (auto res = collect_rects(root, measured_tree, out); !res)
+        return std::move(res.error()).unexpected();
 
-    fill_rects(res, root, measured_tree);
-
-    return res;
+    return out;
 }

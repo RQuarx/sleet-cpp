@@ -1,1 +1,21 @@
 test_dependencies = [ dependency('sleet'), dependency('boost.ut') ]
+
+tests = {
+  'application':   'application.cc',
+  'line-breaking': 'line-breaking.cc',
+  'ustring':       'ustring.cc',
+  'color':         'color.cc',
+  'control':       'control.cc',
+  'nodes':         'nodes.cc',
+  'layout':        'layout.cc',
+  'wrap':          'wrap.cc',
+  'render':        'render.cc',
+  'theme':         'theme.cc',
+  'widgets':       'widgets.cc',
+}
+
+foreach name, source : tests
+  test_exe = executable(name, source, dependencies: test_dependencies)
+  test(name, test_exe,
+       env: [ 'SDL_VIDEODRIVER=dummy', 'SDL_RENDER_DRIVER=software' ])
+endforeach

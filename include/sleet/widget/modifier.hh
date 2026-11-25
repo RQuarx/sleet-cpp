@@ -1,112 +1,304 @@
 #pragma once
+#include <algorithm>
+#include <string>
+#include <utility>
+
 #include "sleet/widget/node.hh"
 
 
 namespace sleet::widget
 {
-#define MODIFIER(name, type, member)                                           \
-    inline auto name(type v)                                                   \
-    {                                                                          \
-        return _impl::modifier_fn { [v = std::move(v)](_impl::node_data &data) \
-                                    { data.member = v; } };                    \
+    namespace _impl
+    {
+        template <typename F>
+        [[nodiscard]]
+        auto make_modifier(F &&fn)
+        { return modifier_fn<std::decay_t<F>> { std::forward<F>(fn) }; }
     }
 
-    MODIFIER(id, widget_id, id)
-    MODIFIER(gap, float, gap)
 
-    MODIFIER(halign, align, alignment.horizontal)
-    MODIFIER(valign, align, alignment.vertical)
-
-#undef MODIFIER
-#define MODIFIER(name, member, on_true, on_false)                                      \
-    inline auto name(bool val)                                                         \
-    {                                                                                  \
-        return _impl::modifier_fn { [val](_impl::node_data &data)                      \
-                                    { data.member = val ? (on_true) : (on_false); } }; \
+    [[nodiscard]]
+    inline auto id(widget_id value)
+    {
+        return _impl::make_modifier([value = std::move(value)](node_data &data)
+                                    { data.id = value; });
     }
 
-    MODIFIER(hexpand, size.horizontal, sizing::grow(), sizing::fit())
-    MODIFIER(vexpand, size.vertical, sizing::grow(), sizing::fit())
+    [[nodiscard]]
+    inline auto gap(float value)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.gap = value; });
+    }
 
-#undef MODIFIER
 
+    [[nodiscard]]
+    inline auto halign(align value)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.alignment.x = value; });
+    }
+
+    [[nodiscard]]
+    inline auto valign(align value)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.alignment.y = value; });
+    }
+
+    [[nodiscard]]
+    inline auto align_self(align value)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.align_self = value; });
+    }
+
+    [[nodiscard]]
+    inline auto justify_content(justify value)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.main_axis = value; });
+    }
+
+
+    [[nodiscard]]
+    inline auto hexpand(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data)
+                                    { data.size.x = value ? sizing::fill() : sizing::fit(); });
+    }
+
+    [[nodiscard]]
+    inline auto vexpand(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data)
+                                    { data.size.y = value ? sizing::fill() : sizing::fit(); });
+    }
+
+    [[nodiscard]]
+    inline auto flex(float weight)
+    {
+        return _impl::make_modifier([weight](node_data &data) { data.flex = weight; });
+    }
+
+
+    [[nodiscard]]
     inline auto width(float px)
     {
-        return _impl::modifier_fn { [=](_impl::node_data &data)
-                                    { data.size.w = sizing::fixed(px); } };
+        return _impl::make_modifier([px](node_data &data) { data.size.x = sizing::fixed(px); });
     }
 
+    [[nodiscard]]
+    inline auto width(sizing value)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.size.x = value; });
+    }
+
+    [[nodiscard]]
     inline auto height(float px)
     {
-        return _impl::modifier_fn { [=](_impl::node_data &data)
-                                    { data.size.h = sizing::fixed(px); } };
+        return _impl::make_modifier([px](node_data &data) { data.size.y = sizing::fixed(px); });
     }
 
+    [[nodiscard]]
+    inline auto height(sizing value)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.size.y = value; });
+    }
 
+    [[nodiscard]]
     inline auto size(float width, float height)
     {
-        return _impl::modifier_fn { [=](_impl::node_data &data)
-                                    {
-                                        data.size.w = sizing::fixed(width);
-                                        data.size.h = sizing::fixed(height);
-                                    } };
+        return _impl::make_modifier(
+            [width, height](node_data &data)
+            {
+                data.size.x = sizing::fixed(width);
+                data.size.y = sizing::fixed(height);
+            });
     }
 
-
+    [[nodiscard]]
     inline auto size(float all)
     {
-        return _impl::modifier_fn { [=](_impl::node_data &data)
-                                    {
-                                        data.size.w = sizing::fixed(all);
-                                        data.size.h = sizing::fixed(all);
-                                    } };
+        return _impl::make_modifier(
+            [all](node_data &data)
+            {
+                data.size.x = sizing::fixed(all);
+                data.size.y = sizing::fixed(all);
+            });
     }
 
-
+    [[nodiscard]]
     inline auto size(sizing width, sizing height)
     {
-        return _impl::modifier_fn { [=](_impl::node_data &data)
-                                    {
-                                        data.size.w = width;
-                                        data.size.h = height;
-                                    } };
+        return _impl::make_modifier(
+            [width, height](node_data &data)
+            {
+                data.size.x = width;
+                data.size.y = height;
+            });
     }
 
-    inline auto size(sizing s)
+    [[nodiscard]]
+    inline auto size(sizing value)
     {
-        return _impl::modifier_fn { [=](_impl::node_data &data)
-                                    {
-                                        data.size.w = s;
-                                        data.size.h = s;
-                                    } };
-    }
-
-
-    inline auto text_of(std::string label)
-    {
-        return _impl::modifier_fn { [l = std::move(label)](_impl::node_data &data)
-                                    { data.text = l; } };
+        return _impl::make_modifier(
+            [value](node_data &data)
+            {
+                data.size.x = value;
+                data.size.y = value;
+            });
     }
 
 
-    inline auto text_weight(font_weight w)
+    [[nodiscard]]
+    inline auto margin(math::edge_insets value)
     {
-        return _impl::modifier_fn { [=](_impl::node_data &d) { d.font.weight = w; } };
+        return _impl::make_modifier([value = value.sanitized()](node_data &data)
+                                    { data.margin = value; });
+    }
+
+    [[nodiscard]]
+    inline auto margin(float all)
+    { return margin(math::edge_insets { all }); }
+
+    [[nodiscard]]
+    inline auto margin(float vertical, float horizontal)
+    { return margin(math::edge_insets { vertical, horizontal }); }
+
+    [[nodiscard]]
+    inline auto padding(math::edge_insets value)
+    {
+        return _impl::make_modifier([value = value.clamped_non_negative()](node_data &data)
+                                    { data.padding = value; });
+    }
+
+    [[nodiscard]]
+    inline auto padding(float all)
+    { return padding(math::edge_insets { all }); }
+
+    [[nodiscard]]
+    inline auto padding(float vertical, float horizontal)
+    { return padding(math::edge_insets { vertical, horizontal }); }
+
+
+    [[nodiscard]]
+    inline auto text_of(std::string text)
+    {
+        return _impl::make_modifier([text = std::move(text)](node_data &data)
+                                    { data.text = text; });
+    }
+
+    [[nodiscard]]
+    inline auto text_weight(font_weight weight)
+    {
+        return _impl::make_modifier([weight](node_data &data) { data.font.weight = weight; });
+    }
+
+    [[nodiscard]]
+    inline auto text_size(float size)
+    {
+        return _impl::make_modifier([size](node_data &data) { data.font.size = size; });
+    }
+
+    [[nodiscard]]
+    inline auto text_role(font_role role)
+    {
+        return _impl::make_modifier([role](node_data &data) { data.font.role = role; });
+    }
+
+    [[nodiscard]]
+    inline auto text_decoration(text_attribute::flag flag, bool state = true)
+    {
+        return _impl::make_modifier([flag, state](node_data &data)
+                                    { data.font.attribute.set(flag, state); });
     }
 
 
-    inline auto text_decoration(text_attribute::flag f, bool state = true)
+    [[nodiscard]]
+    inline auto background(color value)
     {
-        return _impl::modifier_fn { [=](_impl::node_data &d) { d.font.attribute.set(f, state); } };
+        return _impl::make_modifier([value](node_data &data) { data.visual.background = value; });
     }
 
-    inline auto margin(math::vec4 margin)
+    [[nodiscard]]
+    inline auto foreground(color value)
     {
-        return _impl::modifier_fn { [=](_impl::node_data &d) { d.margin = margin; } };
+        return _impl::make_modifier([value](node_data &data) { data.visual.foreground = value; });
     }
 
-    inline auto padding(math::vec4 padding)
+    [[nodiscard]]
+    inline auto text_color(color value)
+    { return foreground(value); }
+
+    [[nodiscard]]
+    inline auto border(color value, float width = 1.F)
     {
-        return _impl::modifier_fn { [=](_impl::node_data &d) { d.padding = padding; } };
+        return _impl::make_modifier(
+            [value, width](node_data &data)
+            {
+                data.visual.border       = value;
+                data.visual.border_width = width;
+            });
+    }
+
+    [[nodiscard]]
+    inline auto border_width(float width)
+    {
+        return _impl::make_modifier([width](node_data &data) { data.visual.border_width = width; });
+    }
+
+
+    [[nodiscard]]
+    inline auto on_click(std::string action)
+    {
+        return _impl::make_modifier([action = std::move(action)](node_data &data)
+                                    { data.action = action; });
+    }
+
+    [[nodiscard]]
+    inline auto visible(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.visible = value; });
+    }
+
+
+    [[nodiscard]]
+    inline auto control(control_kind value)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.control = value; });
+    }
+
+    [[nodiscard]]
+    inline auto tone_of(tone value)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.tint = value; });
+    }
+
+    [[nodiscard]]
+    inline auto variant(button_variant value)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.variant = value; });
+    }
+
+    [[nodiscard]]
+    inline auto focusable(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.focusable = value; });
+    }
+
+    [[nodiscard]]
+    inline auto checked(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.checked = value; });
+    }
+
+    [[nodiscard]]
+    inline auto control_value(float value)
+    {
+        return _impl::make_modifier([value](node_data &data)
+                                    { data.control_value = std::clamp(value, 0.F, 1.F); });
+    }
+
+    [[nodiscard]]
+    inline auto placeholder(std::string value)
+    {
+        return _impl::make_modifier([value = std::move(value)](node_data &data)
+                                    { data.placeholder = value; });
     }
 }

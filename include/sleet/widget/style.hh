@@ -1,30 +1,79 @@
 #pragma once
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <optional>
 
 #include <kei-utils/bitmask.hh>
 
+#include "sleet/color.hh"
+
 
 namespace sleet::widget
 {
-    /// Describes the size of a widget.
+    /// How a widget takes up space along one axis.
     struct sizing
     {
-        [[nodiscard]] static constexpr auto fit() noexcept -> sizing { return -1.F; }
-        [[nodiscard]] static constexpr auto grow() noexcept -> sizing { return -2.F; }
-        [[nodiscard]] static constexpr auto fixed(float v) noexcept -> sizing { return v; }
+        enum class mode : std::uint8_t
+        {
+            fit,   ///< Use the intrinsic size.
+            grow,  ///< Share free space on the parent's main axis using \c flex.
+            fill,  ///< Stretch across the parent's cross axis and share its main axis.
+            fixed, ///< Use an explicit size.
+        };
 
-        [[nodiscard]] auto is_fit() const noexcept -> bool { return m_value == -1.F; }
-        [[nodiscard]] auto is_grow() const noexcept -> bool { return m_value == -2.F; }
-        [[nodiscard]] auto is_fixed() const noexcept -> bool { return m_value >= 0.F; }
 
-        [[nodiscard]] auto get_fixed_size() const noexcept -> float { return m_value; }
+        [[nodiscard]]
+        static constexpr auto fit() noexcept -> sizing
+        { return { mode::fit, 0.F }; }
+
+        [[nodiscard]]
+        static constexpr auto grow() noexcept -> sizing
+        { return { mode::grow, 1.F }; }
+
+        [[nodiscard]]
+        static constexpr auto fill() noexcept -> sizing
+        { return { mode::fill, 1.F }; }
+
+        [[nodiscard]]
+        static constexpr auto fixed(float value) noexcept -> sizing
+        {
+            if (!std::isfinite(value) or value < 0.F) return { mode::fixed, 0.F };
+            return { mode::fixed, value };
+        }
+
+
+        [[nodiscard]]
+        constexpr auto is_fit() const noexcept -> bool
+        { return m_mode == mode::fit; }
+        [[nodiscard]]
+        constexpr auto is_grow() const noexcept -> bool
+        { return m_mode == mode::grow; }
+        [[nodiscard]]
+        constexpr auto is_fill() const noexcept -> bool
+        { return m_mode == mode::fill; }
+        [[nodiscard]]
+        constexpr auto is_fixed() const noexcept -> bool
+        { return m_mode == mode::fixed; }
+
+        [[nodiscard]]
+        constexpr auto get_mode() const noexcept -> mode
+        { return m_mode; }
+
+        [[nodiscard]]
+        constexpr auto get_fixed_size() const noexcept -> float
+        { return m_mode == mode::fixed ? m_value : 0.F; }
+
+
+        [[nodiscard]]
+        friend constexpr auto operator==(sizing, sizing) noexcept -> bool = default;
 
     private:
-        float m_value = -1.F;
+        constexpr sizing(mode mode, float value) noexcept : m_mode { mode }, m_value { value } {}
 
 
-        constexpr sizing(float val) noexcept : m_value { val } {}
+        mode  m_mode  = mode::fit;
+        float m_value = 0.F;
     };
 
 
@@ -36,7 +85,17 @@ namespace sleet::widget
     };
 
 
-    /// CSS/OpenType numbers, so 550 is representable
+    enum class justify : std::uint8_t
+    {
+        start,
+        center,
+        end,
+        between,
+    };
+
+
+    /// Weights use CSS and OpenType numbers, so the underlying type can hold
+    /// intermediate values such as 550.
     enum class font_weight : std::uint16_t
     {
         thin        = 100,
@@ -56,9 +115,9 @@ namespace sleet::widget
     public:
         enum flag : base_type
         {
-            underline     = 1 << 0,
-            strikethrough = 1 << 1,
-            italic        = 1 << 2,
+            underline     = 0b001,
+            strikethrough = 0b010,
+            italic        = 0b100,
         };
     };
 
@@ -77,7 +136,20 @@ namespace sleet::widget
         font_role      role = font_role::body;
         text_attribute attribute;
 
-        /// unset = the role's default weight
+        /// \c std::nullopt falls back to the role's default weight.
         std::optional<font_weight> weight;
+
+        /// \c std::nullopt falls back to the role's default size.
+        std::optional<float> size;
+    };
+
+
+    /// Visual properties that are independent of layout.
+    struct style
+    {
+        std::optional<color> background;
+        std::optional<color> foreground;
+        std::optional<color> border;
+        float                border_width = 1.F;
     };
 }

@@ -1,42 +1,33 @@
 #pragma once
+#include <concepts>
+#include <cstddef>
 #include <cstdint>
+#include <format>
+#include <functional>
+#include <optional>
+#include <ranges>
+#include <source_location>
+#include <string>
 #include <string_view>
+#include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include <kei-utils/bitmask.hh>
 #include <kei-utils/result.hh>
 
+#include "sleet/error.hh"
+#include "sleet/math/edge_insets.hh"
 #include "sleet/math/vec2.hh"
-#include "sleet/math/vec4.hh"
+#include "sleet/widget/control.hh"
 #include "sleet/widget/id.hh"
 #include "sleet/widget/style.hh"
 
 
 namespace sleet::widget
 {
-    namespace _impl
-    {
-        template <std::size_t N>
-        struct widget_name
-        {
-            std::array<char, N> string;
-
-
-            // NOLINTNEXTLINE(modernize-avoid-c-arrays, cppcoreguidelines-avoid-c-arrays)
-            constexpr widget_name(const char (&name)[N]) { std::copy_n(name, N, string.begin()); }
-
-
-            [[nodiscard]] auto view() const && -> std::string_view = delete;
-            [[nodiscard]]
-            constexpr auto view() const & -> std::string_view
-            { return { string.data(), N - 1 }; }
-        };
-    }
-
-
-    /// The "type" of a node. A node's basically always either these types (box, row, column,
-    /// or text), and any complex widgets structures can be simplified down to these four types.
+    /// The kind of a node. Every node is one of these four primitives, and
+    /// larger widgets are built by composing them.
     enum class node_kind : std::uint8_t
     {
         box,
@@ -45,7 +36,9 @@ namespace sleet::widget
         text,
     };
 
-    static constexpr auto node_kind_to_string(node_kind k) noexcept -> std::string_view
+
+    [[nodiscard]]
+    constexpr auto node_kind_to_string(node_kind k) noexcept -> std::string_view
     {
         switch (k)
         {
@@ -58,76 +51,125 @@ namespace sleet::widget
         std::unreachable();
     }
 
-    template <node_kind Kind>
-    static constexpr auto node_kind_to_string() noexcept
-    {
-        if constexpr (Kind == node_kind::box) return _impl::widget_name { "box" };
-        if constexpr (Kind == node_kind::row) return _impl::widget_name { "row" };
-        if constexpr (Kind == node_kind::column) return _impl::widget_name { "column" };
-        if constexpr (Kind == node_kind::text) return _impl::widget_name { "text" };
 
-        std::unreachable();
-    }
+    /// An owning, type-erased widget tree.
+    struct node_data
+    {
+        widget_id   id;
+        std::string text;
+        std::string action;
+
+        std::vector<node_data> children;
+        std::string            name;
+
+        math::vec2_of<sizing> size { sizing::fit(), sizing::fit() };
+
+        math::edge_insets margin;
+        math::edge_insets padding;
+
+        std::source_location origin;
+
+        node_data *parent = nullptr;
+        font_spec  font;
+
+        float gap = 0.F;
+
+        math::vec2_of<align> alignment { align::start, align::start };
+        justify              main_axis = justify::start;
+        std::optional<align> align_self;
+
+        /// Relative share of available space when this node is \c grow or
+        /// \c fill.
+        float flex = 1.F;
+
+        node_kind kind = node_kind::box;
+        style     visual;
+        bool      visible = true;
+
+        /// Built-in behaviour that the runtime updates between frames.
+        control_kind control = control_kind::none;
+        tone         tint    = tone::none;
+
+        /// The visual weight used by button factories.
+        button_variant variant = button_variant::standard;
+
+        /// Whether the widget participates in keyboard focus traversal.
+        bool focusable = false;
+
+        /// The initial state of an indicator widget.
+        bool checked = false;
+
+        /// A normalized value in the range zero to one for sliders.
+        float control_value = 0.F;
+
+        /// Hint text shown by an empty text input or combo box.
+        std::string placeholder;
+
+
+        node_data(std::string_view name, std::source_location origin, node_kind kind);
+        node_data(const node_data &other);
+        node_data(node_data &&other) noexcept;
+        node_data &operator=(const node_data &other);
+        node_data &operator=(node_data &&other) noexcept;
+
+        ~node_data() = default;
+
+
+        /// Finds a node by its complete id.
+        /// \param key The complete widget id.
+        /// \return The matching node.
+        /// \throws std::out_of_range if \p key is missing.
+        auto operator[](std::string_view key) -> node_data &;
+        auto operator[](std::string_view key) const -> const node_data &;
+
+        /// Non-throwing lookup.
+        /// \param key The complete widget id.
+        /// \return The matching node, or \c nullptr when the id is missing.
+        [[nodiscard]] auto find(std::string_view key) noexcept -> node_data *;
+        [[nodiscard]] auto find(std::string_view key) const noexcept -> const node_data *;
+        [[nodiscard]] auto find(const char *key) noexcept -> node_data *;
+        [[nodiscard]] auto find(const char *key) const noexcept -> const node_data *;
+        [[nodiscard]] auto find(const widget_id &key) noexcept -> node_data *;
+        [[nodiscard]] auto find(const widget_id &key) const noexcept -> const node_data *;
+
+
+        [[nodiscard]]
+        auto children_amount(bool recurse = true) const noexcept -> std::size_t;
+
+        void refresh_parents(bool recurse = true) noexcept;
+
+        /// Walks the tree top-down, sets parent pointers, and fills in empty ids.
+        /// Duplicate explicit ids are an error.
+        /// \param parent_path The path prefix used for generated ids.
+        /// \return An error if two explicit ids collide.
+        /// \note Call this once on the root after building the tree.
+        auto finalize(std::string_view parent_path = {}) -> kei::result<>;
+
+
+        [[nodiscard]] auto is_box() const noexcept -> bool { return kind == node_kind::box; }
+        [[nodiscard]] auto is_row() const noexcept -> bool { return kind == node_kind::row; }
+        [[nodiscard]] auto is_column() const noexcept -> bool { return kind == node_kind::column; }
+        [[nodiscard]] auto is_text() const noexcept -> bool { return kind == node_kind::text; }
+
+    private:
+        auto finalize_impl(std::unordered_set<std::string> &seen, std::string_view parent_path)
+            -> kei::result<>;
+    };
 
 
     namespace _impl
     {
-        struct node_data
-        {
-            widget_id   id;
-            std::string text;
-
-            std::vector<node_data> children;
-            std::string_view       name;
-
-            math::tvec2<sizing> size { sizing::fit(), sizing::fit() };
-
-            math::vec4 margin { 0, 0, 0, 0 };
-            math::vec4 padding { 0, 0, 0, 0 };
-
-            std::source_location origin;
-
-            node_data *parent = nullptr;
-            font_spec  font;
-
-            float gap = 0.F;
-
-            math::tvec2<align> alignment { align::start, align::start };
-
-            node_kind kind;
-
-
-            node_data(std::string_view name, std::source_location origin, node_kind kind) noexcept;
-            node_data(node_data &&other) noexcept;
-            node_data(const node_data &other);
-
-            auto operator=(node_data &&other) noexcept -> node_data & = default;
-            auto operator=(const node_data &other) -> node_data &     = default;
-
-
-            [[nodiscard]]
-            auto children_amount(bool recurse = true) const noexcept -> std::size_t;
-            void refresh_parents(bool recurse = true) noexcept;
-
-            /// Sets parent pointers and fills in unset ids, top-down.
-            /// Call once on the root; the tree must not be moved afterwards.
-            void finalize(std::string_view parent_path = {}) noexcept;
-
-
-            [[nodiscard]] auto is_box() const noexcept -> bool { return kind == node_kind::box; }
-            [[nodiscard]] auto is_row() const noexcept -> bool { return kind == node_kind::row; }
-            [[nodiscard]] auto is_text() const noexcept -> bool { return kind == node_kind::text; }
-            [[nodiscard]] auto is_column() const noexcept -> bool
-            { return kind == node_kind::column; }
+        template <typename W>
+        concept widget = requires(std::remove_cvref_t<W> w) {
+            { std::move(w).release() } -> std::same_as<node_data>;
+            { std::remove_cvref_t<W>::name } -> std::convertible_to<std::string_view>;
+            { std::remove_cvref_t<W>::kind } -> std::convertible_to<node_kind>;
+            { std::as_const(w).data_view() } -> std::same_as<const node_data &>;
         };
 
 
         template <typename W>
-        concept widget = requires(std::remove_cvref_t<W> w) {
-            { std::move(w).release() } noexcept -> std::same_as<node_data>;
-            { std::remove_cvref_t<W>::name } -> std::convertible_to<std::string_view>;
-            { std::remove_cvref_t<W>::kind } -> std::convertible_to<node_kind>;
-        };
+        concept widget_like = widget<W> or std::same_as<std::remove_cvref_t<W>, node_data>;
 
 
         /// Copies from lvalues, moves from rvalues.
@@ -140,6 +182,9 @@ namespace sleet::widget
                 return std::forward<W>(widget).release();
         }
 
+        /// An already type-erased widget is copied or moved as-is.
+        inline auto take_data(node_data data) -> node_data { return data; }
+
 
         template <std::invocable<node_data &> F>
         struct modifier_fn
@@ -147,75 +192,129 @@ namespace sleet::widget
             F fn;
 
 
-            constexpr modifier_fn(F &&func) noexcept : fn { std::move(func) } {}
-            constexpr modifier_fn(const F &func) noexcept : fn { func } {}
+            modifier_fn(F &&func) : fn { std::move(func) } {}
+            modifier_fn(const F &func) : fn { func } {}
 
             void apply(node_data &data) const { fn(data); }
         };
+
+
+        template <typename R>
+        concept widget_range
+            = std::ranges::input_range<R> and widget_like<std::ranges::range_value_t<R>>;
+
+        /// A function that takes no arguments and produces one widget or a range
+        /// of widgets.
+        template <typename F>
+        concept child_factory
+            = std::invocable<F>
+          and (widget_like<std::invoke_result_t<F>> or widget_range<std::invoke_result_t<F>>);
     }
 
 
-    template <node_kind Kind, _impl::widget_name Name = node_kind_to_string<Kind>()>
+    /// Converts any widget into its type-erased representation.
+    template <_impl::widget W>
+    [[nodiscard]]
+    auto to_data(W &&widget) -> node_data
+    { return _impl::take_data(std::forward<W>(widget)); }
+
+
+    /// An already type-erased widget is passed through (moving from rvalues).
+    [[nodiscard]]
+    inline auto to_data(node_data data) -> node_data
+    { return data; }
+
+
+    template <node_kind Kind>
     class node
     {
     public:
-        static constexpr auto name = Name.view();
+        static constexpr auto name = node_kind_to_string(Kind);
         static constexpr auto kind = Kind;
 
 
-        constexpr node(std::source_location origin) noexcept
+        node(std::source_location origin) noexcept
             requires(kind != node_kind::text)
             : m_data { name, origin, kind }
         {
         }
 
-        constexpr node(std::string text, std::source_location origin) noexcept
+        node(std::string text, std::source_location origin)
             requires(kind == node_kind::text)
             : m_data { name, origin, kind }
         { m_data.text = std::move(text); }
 
 
-        void finalize(std::string_view parent_path = {}) noexcept { m_data.finalize(parent_path); }
+        [[nodiscard]]
+        auto finalize(std::string_view parent_path = {}) -> kei::result<>
+        { return m_data.finalize(parent_path); }
 
 
         [[nodiscard]]
-        constexpr auto data_view() const & noexcept -> const _impl::node_data &
+        auto data_view() const noexcept -> const node_data &
         { return m_data; }
 
 
         [[nodiscard]]
-        constexpr auto release() && noexcept -> _impl::node_data
+        auto release() && noexcept -> node_data
         { return std::move(m_data); }
 
 
         template <typename Self, typename F>
-        auto operator|(this Self &&self, const _impl::modifier_fn<F> &m)
+        auto operator|(this Self &&self, const _impl::modifier_fn<F> &modifier)
             -> std::remove_cvref_t<Self>
         {
-            auto s = prepare(self);
-            m.apply(s.m_data);
-            return s;
+            auto result = prepare(std::forward<Self>(self));
+            modifier.apply(result.m_data);
+            return result;
         }
 
         template <typename F>
-        auto operator|=(const _impl::modifier_fn<F> &m) -> node &
+        auto operator|=(const _impl::modifier_fn<F> &modifier) -> node &
         {
-            m.apply(m_data);
+            modifier.apply(m_data);
             return *this;
         }
 
-        template <typename Self, _impl::widget... W>
+        template <typename Self, _impl::widget_like... W>
         auto operator[](this Self &&self, W &&...kids) -> std::remove_cvref_t<Self>
             requires(kind != node_kind::text)
         {
-            auto s = prepare(self);
-            s.m_data.children.reserve(s.m_data.children.size() + sizeof...(W));
-            (s.m_data.children.emplace_back(_impl::take_data(std::forward<W>(kids))), ...);
-            return s;
+            auto result = prepare(std::forward<Self>(self));
+            result.m_data.children.reserve(result.m_data.children.size() + sizeof...(W));
+            (result.m_data.children.emplace_back(_impl::take_data(std::forward<W>(kids))), ...);
+            return result;
+        }
+
+
+        template <typename Self, _impl::child_factory F>
+        auto operator[](this Self &&self, F &&factory) -> std::remove_cvref_t<Self>
+            requires(kind != node_kind::text)
+        {
+            auto result    = prepare(std::forward<Self>(self));
+            using result_t = std::invoke_result_t<F>;
+
+            if constexpr (_impl::widget_like<result_t>)
+                result.m_data.children.emplace_back(
+                    _impl::take_data(std::invoke(std::forward<F>(factory))));
+            else
+            {
+                auto &&range = std::invoke(std::forward<F>(factory));
+                if constexpr (std::ranges::sized_range<std::remove_cvref_t<result_t>>)
+                    result.m_data.children.reserve(
+                        result.m_data.children.size()
+                        + static_cast<std::size_t>(std::ranges::size(range)));
+
+                for (auto &&kid : range)
+                    result.m_data.children.emplace_back(
+                        _impl::take_data(std::forward<decltype(kid)>(kid)));
+            }
+
+            return result;
         }
 
     private:
-        _impl::node_data m_data;
+        node_data m_data;
 
 
         template <typename Self>

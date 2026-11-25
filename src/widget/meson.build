@@ -1,1 +1,1 @@
-widget_src = files('layout.cc', 'node.cc')
+widget_src = files('control.cc', 'layout.cc', 'node.cc', 'theme.cc')

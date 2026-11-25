@@ -1,8 +1,9 @@
 #pragma once
+#include <algorithm>
 #include <format>
 
+#include "sleet/math/edge_insets.hh"
 #include "sleet/math/vec2.hh"
-#include "sleet/math/vec4.hh"
 
 
 namespace sleet::math
@@ -13,17 +14,61 @@ namespace sleet::math
         vec2 size;
 
 
-        constexpr rect(vec2 pos, vec2 size) noexcept : position { pos }, size { size } {}
-        constexpr rect(vec4 vec) noexcept : position { vec.x, vec.y }, size { vec.w, vec.h } {}
-        constexpr rect(float x, float y, float w, float h) noexcept
-            : position { x, y }, size { w, h }
+        constexpr rect() noexcept = default;
+        constexpr rect(vec2 pos, vec2 extent) noexcept : position { pos }, size { extent } {}
+        constexpr rect(float x, float y, float width, float height) noexcept
+            : position { x, y }, size { width, height }
         {
         }
 
-        template <typename T>
+
         [[nodiscard]]
-        constexpr auto to() const noexcept -> T
-        { return T { position.x, position.y, size.w, size.h }; }
+        constexpr auto x() const noexcept -> float
+        { return position.x; }
+
+        [[nodiscard]]
+        constexpr auto y() const noexcept -> float
+        { return position.y; }
+
+        [[nodiscard]]
+        constexpr auto width() const noexcept -> float
+        { return size.x; }
+
+        [[nodiscard]]
+        constexpr auto height() const noexcept -> float
+        { return size.y; }
+
+        [[nodiscard]]
+        constexpr auto right() const noexcept -> float
+        { return position.x + size.x; }
+
+        [[nodiscard]]
+        constexpr auto bottom() const noexcept -> float
+        { return position.y + size.y; }
+
+        [[nodiscard]]
+        constexpr auto center() const noexcept -> vec2
+        { return { position.x + (size.x / 2.F), position.y + (size.y / 2.F) }; }
+
+        [[nodiscard]]
+        constexpr auto contains(vec2 point) const noexcept -> bool
+        {
+            return point.x >= position.x and point.y >= position.y and point.x < right()
+               and point.y < bottom();
+        }
+
+        [[nodiscard]]
+        constexpr auto inset(edge_insets edges) const noexcept -> rect
+        {
+            return {
+                { position.x + edges.left, position.y + edges.top },
+                { std::max(0.F, size.x - edges.horizontal()),
+                 std::max(0.F, size.y - edges.vertical()) }
+            };
+        }
+
+        [[nodiscard]]
+        friend constexpr auto operator==(rect, rect) noexcept -> bool = default;
     };
 }
 
@@ -36,9 +81,9 @@ struct std::formatter<sleet::math::rect>
     { return ctx.begin(); }
 
     template <class FmtContext>
-    auto format(const sleet::math::rect s, FmtContext &ctx) const -> FmtContext::iterator
+    auto format(const sleet::math::rect &r, FmtContext &ctx) const -> FmtContext::iterator
     {
-        return std::format_to(ctx.out(), "[({}, {}), ({}, {})]", s.position.x, s.position.y,
-                              s.size.w, s.size.h);
+        return std::format_to(ctx.out(), "[({}, {}), ({} x {})]", r.position.x, r.position.y,
+                              r.size.x, r.size.y);
     }
 };

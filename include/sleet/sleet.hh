@@ -1,0 +1,23 @@
+#pragma once
+
+/// Umbrella header for the public Sleet API.
+
+#include "sleet/application.hh"
+#include "sleet/color.hh"
+#include "sleet/error.hh"
+#include "sleet/math/edge_insets.hh"
+#include "sleet/math/rect.hh"
+#include "sleet/math/vec2.hh"
+#include "sleet/math/vec4.hh"
+#include "sleet/render_context.hh"
+#include "sleet/text/line_breaking.hh"
+#include "sleet/text/ustring.hh"
+#include "sleet/text/wrap.hh"
+#include "sleet/traits.hh"
+#include "sleet/widget/id.hh"
+#include "sleet/widget/layout.hh"
+#include "sleet/widget/modifier.hh"
+#include "sleet/widget/node.hh"
+#include "sleet/widget/style.hh"
+#include "sleet/widget/theme.hh"
+#include "sleet/widgets.hh"
