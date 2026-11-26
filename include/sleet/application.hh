@@ -745,8 +745,34 @@ namespace sleet
             bool focus_visible  = false;
             bool reveal_focus   = false;
             bool quit_requested = false;
-            bool dirty          = true;
+
+            /// Requests any repaint, including render-only changes.
+            bool dirty = true;
+
+            /// The widget tree must be rebuilt from the view function.
+            bool view_dirty = true;
+
+            /// The existing tree must be measured again, without rebuilding it.
+            bool layout_dirty = true;
+
+            /// Smooth scrolling still has to advance on the next frame.
+            bool scroll_animating = false;
         };
+
+
+        static void mark_view_dirty(session &current) noexcept
+        {
+            current.dirty        = true;
+            current.view_dirty   = true;
+            current.layout_dirty = true;
+        }
+
+
+        static void mark_layout_dirty(session &current) noexcept
+        {
+            current.dirty        = true;
+            current.layout_dirty = true;
+        }
 
 
         /// Physical output pixels per logical window point.
@@ -776,7 +802,7 @@ namespace sleet
             SDL_GetWindowSize(m_window.get(), &m_width, &m_height);
             context.set_pixel_scale(pixel_scale());
             context.set_viewport({ static_cast<float>(m_width), static_cast<float>(m_height) });
-            current.dirty = true;
+            mark_view_dirty(current);
         }
 
 
@@ -1060,7 +1086,7 @@ namespace sleet
                 current.preedit_id.reset();
                 current.preedit_text.clear();
                 current.preedit_caret = 0;
-                current.dirty         = true;
+                mark_layout_dirty(current);
             }
 
             current.focus_visible = keyboard;
@@ -1336,7 +1362,7 @@ namespace sleet
                     if (sibling.control == widget::control_kind::combo_popup)
                         sibling.visible = open;
 
-            current.dirty = true;
+            mark_layout_dirty(current);
         }
 
 
@@ -1347,7 +1373,7 @@ namespace sleet
             current.open_combos.clear();
             if (current.tree.has_value())
                 apply_combo_visibility(*current.tree, current.open_combos);
-            current.dirty = true;
+            mark_layout_dirty(current);
         }
 
 
@@ -1404,7 +1430,7 @@ namespace sleet
 
             current.open_combos.clear();
             if (current.tree) apply_combo_visibility(*current.tree, current.open_combos);
-            current.dirty = true;
+            mark_layout_dirty(current);
         }
 
 
@@ -1516,7 +1542,7 @@ namespace sleet
         void apply_text_edit(session &current, widget::node_data &node) const
         {
             emit_control(current, event::kind::text_edit, node, node.text);
-            current.dirty = true;
+            mark_view_dirty(current);
         }
 
 
@@ -2331,7 +2357,7 @@ namespace sleet
                 offset.x    += dx * 0.4F;
                 offset.y    += dy * 0.4F;
 
-                current.dirty = true;
+                mark_layout_dirty(current);
             }
 
             dispatch(value, current);
@@ -2544,7 +2570,7 @@ namespace sleet
                     return false;
                 }
 
-                current.dirty = true;
+                mark_view_dirty(current);
             }
 
             return true;
@@ -2557,7 +2583,7 @@ namespace sleet
             if (auto message = m_subscription())
             {
                 current.messages.push_back(std::move(*message));
-                current.dirty = true;
+                mark_view_dirty(current);
             }
         }
 
@@ -2688,11 +2714,10 @@ namespace sleet
         }
 
 
+        /// Rebuilds the tree from the view function and measures it. State
+        /// changes, control edits, resizes, and theme changes take this path.
         template <typename Measure>
-        auto refresh(session        &current,
-                     render_context &context,
-                     const Measure  &measure,
-                     float           delta_seconds) -> bool
+        auto rebuild(session &current, const Measure &measure, float delta_seconds) -> bool
         {
             auto next_tree = m_view(current.state);
             if (!next_tree)
@@ -2718,14 +2743,55 @@ namespace sleet
                 return false;
             }
 
-            current.tree   = std::move(*next_tree);
-            current.layout = std::move(*next_layout);
+            current.tree         = std::move(*next_tree);
+            current.layout       = std::move(*next_layout);
+            current.view_dirty   = false;
+            current.layout_dirty = false;
 
             current.scroll_metrics.clear();
             ensure_visible(current, *current.layout);
-            const auto scrolling
+            current.scroll_animating
                 = apply_scroll_offsets(current, *current.tree, *current.layout, delta_seconds);
             sync_text_input(current);
+
+            return true;
+        }
+
+
+        /// Re-measures the existing tree. Used for smooth scrolling, combo
+        /// visibility, and focus reveal, where no view state changed.
+        template <typename Measure>
+        auto reflow(session &current, const Measure &measure, float delta_seconds) -> bool
+        {
+            if (!current.tree) return true;
+
+            auto next_layout = calculate_layout(*current.tree, measure,
+                                                { static_cast<float>(m_width),
+                                                  static_cast<float>(m_height) });
+            if (!next_layout)
+            {
+                std::println(stderr, "sleet: layout failed: {}", next_layout.error().what());
+                return false;
+            }
+
+            current.layout       = std::move(*next_layout);
+            current.layout_dirty = false;
+
+            current.scroll_metrics.clear();
+            ensure_visible(current, *current.layout);
+            current.scroll_animating
+                = apply_scroll_offsets(current, *current.tree, *current.layout, delta_seconds);
+
+            return true;
+        }
+
+
+        /// Paints the current tree and layout. Render-only changes such as
+        /// hover fades, tooltips, and toasts take this path without rebuilding
+        /// the view or measuring text again.
+        auto present(session &current, render_context &context, float delta_seconds) -> bool
+        {
+            if (!current.tree or !current.layout) return true;
 
             auto       progress = std::unordered_map<widget::widget_id, interaction_progress> {};
             const auto animating
@@ -2784,7 +2850,7 @@ namespace sleet
                 return false;
             }
 
-            current.dirty = animating or scrolling;
+            current.dirty = animating or current.scroll_animating;
             return true;
         }
 
@@ -2829,7 +2895,9 @@ namespace sleet
 
                 pump_subscription(current);
 
-                if (m_redraw_requested.exchange(false)) current.dirty = true;
+                // Themes can change font metrics, and toasts only need a
+                // repaint. Re-measuring is cheap and keeps both correct.
+                if (m_redraw_requested.exchange(false)) mark_layout_dirty(current);
 
                 const auto now     = SDL_GetTicks();
                 const auto elapsed = static_cast<float>(now - last_tick) / 1000.F;
@@ -2839,10 +2907,22 @@ namespace sleet
                 if (advance_toasts(delta)) current.dirty = true;
                 update_tooltip(current);
 
+                if (current.view_dirty)
+                {
+                    if (!rebuild(current, measure, delta)) return 1;
+                    if (!present(current, context, delta)) return 1;
+                }
+                else if (current.dirty)
+                {
+                    if ((current.layout_dirty or current.scroll_animating)
+                        and !reflow(current, measure, delta))
+                        return 1;
+
+                    if (!present(current, context, delta)) return 1;
+                }
+
                 if (current.dirty)
                 {
-                    if (!refresh(current, context, measure, delta)) return 1;
-
                     // Presentation is paced by VSync while the scene is
                     // animating. Do not add an artificial wait here: doing so
                     // delays the next animated frame by a full refresh period

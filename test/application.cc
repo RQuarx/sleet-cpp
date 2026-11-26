@@ -26,6 +26,16 @@ namespace
     }
 
 
+    auto push_motion(float x, float y) -> void
+    {
+        SDL_Event native {};
+        native.type     = SDL_EVENT_MOUSE_MOTION;
+        native.motion.x = x;
+        native.motion.y = y;
+        SDL_PushEvent(&native);
+    }
+
+
     auto push_key(SDL_Keycode key, SDL_Keymod mod = SDL_KMOD_NONE) -> void
     {
         SDL_Event native {};
@@ -932,6 +942,76 @@ const boost::ut::suite overlay_tests = []
         expect(eq(observed.twos, 1));
         expect(eq(observed.cancels, 2));
         expect(!observed.open);
+    };
+};
+
+
+const boost::ut::suite frame_reuse_tests = []
+{
+    using namespace boost::ut;
+
+    "render-only frames reuse the view and layout"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {};
+
+        struct message
+        {
+            int kind = 0;
+        };
+
+        using app = sleet::application<state, message>;
+
+        app *instance = nullptr;
+        auto views    = 0;
+        auto frame    = 0;
+
+        auto app_object = app { "sleet-frame-reuse-test", 320, 240, std::move(theme) };
+        instance        = &app_object;
+
+        auto result
+            = app_object
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message {} }; })
+                  .on_update(
+                      [&instance](state &, const message &value, auto &&) -> kei::result<>
+                      {
+                          if (value.kind == 1) instance->notify("toast", 5.F);
+                          return {};
+                      })
+                  .on_view(
+                      [&views](const state &)
+                      {
+                          views++;
+                          return column()[button("Hover", "hover") | width(200.F)
+                                          | height(40.F) | transition(0.2F)]
+                               | width(300.F);
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1: push_motion(10.F, 10.F); return message { 1 };
+                          case 8: push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+
+        // One view for boot, one for the toast message. The hover transition
+        // and toast fade produce several more frames, but all of them should
+        // repaint the existing tree instead of rebuilding it.
+        expect(views <= 3) << "view calls: " << views;
     };
 };
 
