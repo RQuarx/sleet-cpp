@@ -423,7 +423,7 @@ namespace sleet
             if (!m_renderer)
                 throw kei::error { "Failed to create the renderer: {}", SDL_GetError() };
 
-            SDL_SetRenderVSync(m_renderer.get(), 1);
+            m_vsync_active = SDL_SetRenderVSync(m_renderer.get(), 1);
 
             // Layout is expressed in window points. The renderer draws in
             // physical pixels, so high-DPI windows use a pixel scale instead of
@@ -580,6 +580,10 @@ namespace sleet
         SDL_Cursor *m_text_cursor    = nullptr;
         SDL_Cursor *m_pointer_cursor = nullptr;
         SDL_Cursor *m_current_cursor = nullptr;
+
+        /// Whether presentation blocks on the display refresh. Without it the
+        /// loop paces animated frames itself.
+        bool m_vsync_active = false;
 
         render_context *m_context = nullptr;
 
@@ -860,6 +864,10 @@ namespace sleet
         }
 
 
+        /// How long the pointer must rest before a tooltip appears.
+        static constexpr auto tooltip_delay_ms = std::uint64_t { 550 };
+
+
         /// Restarts the rest timer after pointer movement. Moving within the
         /// same widget still counts as movement, so a tooltip only appears
         /// once the pointer settles.
@@ -892,8 +900,7 @@ namespace sleet
 
             if (current.tooltip_visible) return;
 
-            constexpr auto delay_ms = std::uint64_t { 550 };
-            if (SDL_GetTicks() - current.tooltip_started < delay_ms) return;
+            if (SDL_GetTicks() - current.tooltip_started < tooltip_delay_ms) return;
 
             const auto *node = current.tree->find(*current.pointer_target);
             if (node == nullptr) return;
@@ -915,6 +922,29 @@ namespace sleet
             current.tooltip_anchor  = *bounds;
             current.tooltip_visible = true;
             current.dirty           = true;
+        }
+
+
+        /// Returns the number of milliseconds the idle loop may sleep before a
+        /// timer needs attention, or -1 to block until an SDL event arrives.
+        [[nodiscard]]
+        auto idle_timeout(const session &current) const -> Sint32
+        {
+            auto timeout = Sint32 { -1 };
+
+            // Subscriptions are polled, so they keep the historical cadence.
+            if (m_subscription) timeout = 16;
+
+            if (current.pointer_target and !current.tooltip_visible)
+            {
+                const auto elapsed   = SDL_GetTicks() - current.tooltip_started;
+                const auto remaining = elapsed >= tooltip_delay_ms
+                                         ? Sint32 { 0 }
+                                         : static_cast<Sint32>(tooltip_delay_ms - elapsed);
+                timeout = timeout < 0 ? remaining : std::min(timeout, remaining);
+            }
+
+            return timeout;
         }
 
 
@@ -2751,11 +2781,37 @@ namespace sleet
                 if (advance_toasts(delta)) current.dirty = true;
                 update_tooltip(current);
 
-                if (current.dirty and !refresh(current, context, measure, delta)) return 1;
+                if (current.dirty)
+                {
+                    if (!refresh(current, context, measure, delta)) return 1;
+
+                    // Presentation is paced by VSync while the scene is
+                    // animating. Do not add an artificial wait here: doing so
+                    // delays the next animated frame by a full refresh period
+                    // in addition to the VSync block.
+                    SDL_Event native;
+                    while (SDL_PollEvent(&native)) handle_event(current, context, native);
+
+                    // Without VSync, presentation returns immediately. Pace
+                    // animated frames here so they do not spin the CPU.
+                    if (!m_vsync_active) SDL_Delay(16);
+                    continue;
+                }
+
+                // Idle: block until input arrives or a timer needs attention.
+                // Subscriptions are polled, so they retain their previous
+                // cadence. Tooltips wake exactly when their delay expires.
+                auto timeout = idle_timeout(current);
 
                 SDL_Event native;
-                if (!SDL_PollEvent(&native))
-                    if (!SDL_WaitEventTimeout(&native, 16)) continue;
+                if (timeout == 0) continue;
+
+                if (timeout < 0)
+                {
+                    if (!SDL_WaitEvent(&native)) continue;
+                }
+                else if (!SDL_WaitEventTimeout(&native, timeout))
+                    continue;
 
                 do { handle_event(current, context, native); } while (SDL_PollEvent(&native));
             }
