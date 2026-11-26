@@ -936,6 +936,44 @@ const boost::ut::suite overlay_tests = []
 };
 
 
+const boost::ut::suite modal_paint_order_tests = []
+{
+    using namespace boost::ut;
+
+    "the active modal follows paint order, not document order"_test = []
+    {
+        using namespace sleet::widget;
+
+        // The in-flow modal is declared last, and the higher-z modal first.
+        // Paint order still puts the floating modals above the in-flow one,
+        // and z-index orders the two floating modals.
+        auto tree = to_data(column()[box() | id("high") | floating() | z_index(5)
+                                         | modal("high"),
+                                     box() | id("low") | floating() | z_index(1)
+                                         | modal("low"),
+                                     box() | id("flow") | modal("flow")]);
+        expect(static_cast<bool>(tree.finalize()));
+
+        const auto *modal = sleet::_impl::active_modal(tree);
+        expect(modal != nullptr);
+        if (modal != nullptr) expect(modal->id == widget_id { "high" });
+    };
+
+    "equal z-index keeps floating document order"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto tree = to_data(column()[box() | id("first") | floating() | modal("first"),
+                                     box() | id("second") | floating() | modal("second")]);
+        expect(static_cast<bool>(tree.finalize()));
+
+        const auto *modal = sleet::_impl::active_modal(tree);
+        expect(modal != nullptr);
+        if (modal != nullptr) expect(modal->id == widget_id { "second" });
+    };
+};
+
+
 const boost::ut::suite modal_hit_tests = []
 {
     using namespace boost::ut;

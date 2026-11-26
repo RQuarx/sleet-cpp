@@ -241,30 +241,88 @@ namespace sleet
         }
 
 
+        /// Orders two modal candidates exactly as the renderer paints them.
+        struct modal_paint_key
+        {
+            bool        floating       = false;
+            int         z_index        = 0;
+            std::size_t floating_order = 0;
+            std::size_t order          = 0;
+        };
+
+
+        [[nodiscard]]
+        inline auto paints_above(const modal_paint_key &lhs,
+                                 const modal_paint_key &rhs) noexcept -> bool
+        {
+            // In-flow content is painted before every floating node.
+            if (lhs.floating != rhs.floating) return lhs.floating;
+
+            if (lhs.floating)
+            {
+                // Floating nodes sort by z-index, then by the document order
+                // of their outermost floating ancestor. A nested floating node
+                // is its own entry in the global floating pass.
+                if (lhs.z_index != rhs.z_index) return lhs.z_index > rhs.z_index;
+                if (lhs.floating_order != rhs.floating_order)
+                    return lhs.floating_order > rhs.floating_order;
+            }
+
+            return lhs.order > rhs.order;
+        }
+
+
+        inline void scan_modals(const widget::node_data &node, bool              floating,
+                                int floating_z, std::size_t floating_order, std::size_t &order,
+                                const widget::node_data *&best,
+                                modal_paint_key         &best_key) noexcept
+        {
+            if (!effectively_visible(node)) return;
+
+            const auto node_order = order++;
+
+            if (node.floating)
+            {
+                floating       = true;
+                floating_z     = node.z_index;
+                floating_order = node_order;
+            }
+
+            if (node.modal)
+            {
+                const auto key = modal_paint_key {
+                    .floating       = floating,
+                    .z_index        = floating ? floating_z : 0,
+                    .floating_order = floating_order,
+                    .order          = node_order,
+                };
+
+                if (best == nullptr or paints_above(key, best_key))
+                {
+                    best     = &node;
+                    best_key = key;
+                }
+            }
+
+            for (const auto &child : node.children)
+                scan_modals(child, floating, floating_z, floating_order, order, best, best_key);
+        }
+
+
         /// Returns the topmost visible modal surface, in paint order. A modal
         /// blocks pointer input to everything outside its subtree.
         [[nodiscard]]
         inline auto active_modal(const widget::node_data &root) noexcept
             -> const widget::node_data *
         {
-            const widget::node_data *result = nullptr;
-            auto                     stack  = std::vector<const widget::node_data *> { &root };
+            // Floating nodes paint above in-flow content, sorted by z-index.
+            // Selecting the last modal in document order would target a dialog
+            // that is visually underneath another.
+            const widget::node_data *result   = nullptr;
+            auto                     best_key = modal_paint_key {};
+            auto                     order    = std::size_t { 0 };
 
-            while (!stack.empty())
-            {
-                const auto *node = stack.back();
-                stack.pop_back();
-
-                if (!effectively_visible(*node)) continue;
-                if (node->modal) result = node;
-
-                // Push in reverse so the stack visits siblings in document
-                // order; later siblings and nested modals win, matching paint
-                // order.
-                for (auto it = node->children.rbegin(); it != node->children.rend(); ++it)
-                    stack.push_back(&*it);
-            }
-
+            scan_modals(root, false, 0, 0, order, result, best_key);
             return result;
         }
 

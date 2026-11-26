@@ -154,7 +154,7 @@ namespace
                                          | text_role(font_role::heading) | text_color(0xF3F5F8_rgb),
                                      muted("Every built-in widget in one interactive window.")]
                                 | gap(2.F),
-                            spacer(), badge("v1.3.3")]
+                            spacer(), badge("v1.3.4")]
                     | gap(12.F) | width(sizing::fill()) | valign(align::center);
 
 
