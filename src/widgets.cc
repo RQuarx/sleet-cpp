@@ -51,7 +51,7 @@ namespace
         auto result = column(origin);
         result     |= width(sizing::fill());
         result     |= gap(2.F);
-        result      = result[std::move(header)];
+        result      = std::move(result)[std::move(header)];
 
         // The option list is one floating box: it is the root of the popup
         // subtree and keeps normal column layout for its rows.
@@ -67,15 +67,15 @@ namespace
 
             if (option_ids != nullptr and i < option_ids->size()) option |= key((*option_ids)[i]);
 
-            options_column = options_column[std::move(option)];
+            options_column = std::move(options_column)[std::move(option)];
         }
 
         auto popup = floating_box(anchor_point::top_left, 100, origin) | width(sizing::fill())
                    | placement(0.F, 38.F) | padding(2.F) | visible(false)
                    | control(control_kind::combo_popup);
-        popup      = popup[std::move(options_column)];
+        popup      = std::move(popup)[std::move(options_column)];
 
-        result = result[std::move(popup)];
+        result = std::move(result)[std::move(popup)];
 
         return result;
     }
@@ -248,8 +248,8 @@ auto sleet::widget::menu_item(std::string          text,
 {
     auto marker = box(origin) | width(16.F) | align_self(align::center);
     if (selected)
-        marker = marker[box(origin) | size(6.F) | tone_of(tone::accent) | radius(3.F)
-                        | align_self(align::center)];
+        marker = std::move(marker)[box(origin) | size(6.F) | tone_of(tone::accent) | radius(3.F)
+                                   | align_self(align::center)];
 
     auto row_widget
         = row(origin)[std::move(marker), label(std::move(text), origin) | hexpand()

@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 
 #include "sleet/widget/node.hh"
 
@@ -40,110 +41,85 @@ namespace
 
         return base;
     }
+
+
+    /// Assigns every copied field from one place. Keeping four hand-written
+    /// copies of this list made adding a widget property error-prone.
+    template <typename Other>
+    void assign_fields(node_data &self, Other &&other)
+    {
+        self.id               = std::forward<Other>(other).id;
+        self.text             = std::forward<Other>(other).text;
+        self.action           = std::forward<Other>(other).action;
+        self.children         = std::forward<Other>(other).children;
+        self.name             = std::forward<Other>(other).name;
+        self.size             = std::forward<Other>(other).size;
+        self.margin           = std::forward<Other>(other).margin;
+        self.padding          = std::forward<Other>(other).padding;
+        self.origin           = std::forward<Other>(other).origin;
+        self.font             = std::forward<Other>(other).font;
+        self.gap              = std::forward<Other>(other).gap;
+        self.alignment        = std::forward<Other>(other).alignment;
+        self.main_axis        = std::forward<Other>(other).main_axis;
+        self.align_self       = std::forward<Other>(other).align_self;
+        self.flex             = std::forward<Other>(other).flex;
+        self.kind             = std::forward<Other>(other).kind;
+        self.visual           = std::forward<Other>(other).visual;
+        self.visible          = std::forward<Other>(other).visible;
+        self.motion           = std::forward<Other>(other).motion;
+        self.floating         = std::forward<Other>(other).floating;
+        self.placement_anchor = std::forward<Other>(other).placement_anchor;
+        self.placement        = std::forward<Other>(other).placement;
+        self.z_index          = std::forward<Other>(other).z_index;
+        self.clip_children    = std::forward<Other>(other).clip_children;
+        self.scrollable       = std::forward<Other>(other).scrollable;
+        self.show_scrollbar   = std::forward<Other>(other).show_scrollbar;
+        self.reveal_on_focus  = std::forward<Other>(other).reveal_on_focus;
+        self.disabled         = std::forward<Other>(other).disabled;
+        self.control          = std::forward<Other>(other).control;
+        self.tint             = std::forward<Other>(other).tint;
+        self.variant          = std::forward<Other>(other).variant;
+        self.focusable        = std::forward<Other>(other).focusable;
+        self.checked          = std::forward<Other>(other).checked;
+        self.control_value    = std::forward<Other>(other).control_value;
+        self.placeholder      = std::forward<Other>(other).placeholder;
+        self.tooltip_text     = std::forward<Other>(other).tooltip_text;
+        self.backdrop         = std::forward<Other>(other).backdrop;
+        self.focus_scope      = std::forward<Other>(other).focus_scope;
+        self.modal            = std::forward<Other>(other).modal;
+        self.cancel_action    = std::forward<Other>(other).cancel_action;
+        self.background_tint  = std::forward<Other>(other).background_tint;
+        self.border_tint      = std::forward<Other>(other).border_tint;
+    }
 }
 
 
-node_data::node_data(std::string_view widget_name, std::source_location source,
-                     node_kind node_type)
+node_data::node_data(std::string_view widget_name, std::source_location source, node_kind node_type)
     : name { widget_name }, origin { source }, kind { node_type }
 {
 }
 
 
 node_data::node_data(const node_data &other)
-    : id { other.id }, text { other.text }, action { other.action }, children { other.children },
-      name { other.name }, size { other.size }, margin { other.margin }, padding { other.padding },
-      origin { other.origin }, font { other.font }, gap { other.gap },
-      alignment { other.alignment }, main_axis { other.main_axis }, align_self { other.align_self },
-      flex { other.flex }, kind { other.kind }, visual { other.visual }, visible { other.visible },
-      motion { other.motion }, floating { other.floating },
-      placement_anchor { other.placement_anchor }, placement { other.placement },
-      z_index { other.z_index }, clip_children { other.clip_children },
-      scrollable { other.scrollable }, show_scrollbar { other.show_scrollbar },
-      reveal_on_focus { other.reveal_on_focus }, disabled { other.disabled },
-      control { other.control }, tint { other.tint }, variant { other.variant },
-      focusable { other.focusable }, checked { other.checked },
-      control_value { other.control_value }, placeholder { other.placeholder },
-      tooltip_text { other.tooltip_text }, backdrop { other.backdrop },
-      focus_scope { other.focus_scope }, modal { other.modal },
-      cancel_action { other.cancel_action }, background_tint { other.background_tint },
-      border_tint { other.border_tint }
-{ refresh_parents(true); }
+{
+    assign_fields(*this, other);
+    refresh_parents(false);
+}
 
 
 node_data::node_data(node_data &&other) noexcept
-    : id { std::move(other.id) }, text { std::move(other.text) },
-      action { std::move(other.action) }, children { std::move(other.children) },
-      name { std::move(other.name) }, size { other.size }, margin { other.margin },
-      padding { other.padding }, origin { other.origin }, font { other.font }, gap { other.gap },
-      alignment { other.alignment }, main_axis { other.main_axis }, align_self { other.align_self },
-      flex { other.flex }, kind { other.kind }, visual { other.visual }, visible { other.visible },
-      motion { other.motion }, floating { other.floating },
-      placement_anchor { other.placement_anchor }, placement { other.placement },
-      z_index { other.z_index }, clip_children { other.clip_children },
-      scrollable { other.scrollable }, show_scrollbar { other.show_scrollbar },
-      reveal_on_focus { other.reveal_on_focus }, disabled { other.disabled },
-      control { other.control }, tint { other.tint }, variant { other.variant },
-      focusable { other.focusable }, checked { other.checked },
-      control_value { other.control_value }, placeholder { std::move(other.placeholder) },
-      tooltip_text { std::move(other.tooltip_text) }, backdrop { other.backdrop },
-      focus_scope { other.focus_scope }, modal { other.modal },
-      cancel_action { std::move(other.cancel_action) }, background_tint { other.background_tint },
-      border_tint { other.border_tint }
-{ refresh_parents(true); }
+{
+    assign_fields(*this, std::move(other));
+    refresh_parents(false);
+}
 
 
 auto node_data::operator=(const node_data &other) -> node_data &
 {
     if (this == &other) return *this;
 
-    id         = other.id;
-    text       = other.text;
-    action     = other.action;
-    children   = other.children;
-    name       = other.name;
-    size       = other.size;
-    margin     = other.margin;
-    padding    = other.padding;
-    origin     = other.origin;
-    font       = other.font;
-    gap        = other.gap;
-    alignment  = other.alignment;
-    main_axis  = other.main_axis;
-    align_self = other.align_self;
-    flex       = other.flex;
-    kind       = other.kind;
-    visual     = other.visual;
-    visible    = other.visible;
-    motion     = other.motion;
-
-    floating         = other.floating;
-    placement_anchor = other.placement_anchor;
-    placement        = other.placement;
-    z_index          = other.z_index;
-    clip_children    = other.clip_children;
-    scrollable       = other.scrollable;
-    show_scrollbar   = other.show_scrollbar;
-    reveal_on_focus  = other.reveal_on_focus;
-    disabled         = other.disabled;
-
-    control       = other.control;
-    tint          = other.tint;
-    variant       = other.variant;
-    focusable     = other.focusable;
-    checked       = other.checked;
-    control_value = other.control_value;
-    placeholder   = other.placeholder;
-
-    tooltip_text    = other.tooltip_text;
-    backdrop        = other.backdrop;
-    focus_scope     = other.focus_scope;
-    modal           = other.modal;
-    cancel_action   = other.cancel_action;
-    background_tint = other.background_tint;
-    border_tint     = other.border_tint;
-
-    refresh_parents(true);
+    assign_fields(*this, other);
+    refresh_parents(false);
     return *this;
 }
 
@@ -152,53 +128,8 @@ auto node_data::operator=(node_data &&other) noexcept -> node_data &
 {
     if (this == &other) return *this;
 
-    id         = std::move(other.id);
-    text       = std::move(other.text);
-    action     = std::move(other.action);
-    children   = std::move(other.children);
-    name       = std::move(other.name);
-    size       = other.size;
-    margin     = other.margin;
-    padding    = other.padding;
-    origin     = other.origin;
-    font       = other.font;
-    gap        = other.gap;
-    alignment  = other.alignment;
-    main_axis  = other.main_axis;
-    align_self = other.align_self;
-    flex       = other.flex;
-    kind       = other.kind;
-    visual     = other.visual;
-    visible    = other.visible;
-    motion     = other.motion;
-
-    floating         = other.floating;
-    placement_anchor = other.placement_anchor;
-    placement        = other.placement;
-    z_index          = other.z_index;
-    clip_children    = other.clip_children;
-    scrollable       = other.scrollable;
-    show_scrollbar   = other.show_scrollbar;
-    reveal_on_focus  = other.reveal_on_focus;
-    disabled         = other.disabled;
-
-    control       = other.control;
-    tint          = other.tint;
-    variant       = other.variant;
-    focusable     = other.focusable;
-    checked       = other.checked;
-    control_value = other.control_value;
-    placeholder   = std::move(other.placeholder);
-
-    tooltip_text    = std::move(other.tooltip_text);
-    backdrop        = other.backdrop;
-    focus_scope     = other.focus_scope;
-    modal           = other.modal;
-    cancel_action   = std::move(other.cancel_action);
-    background_tint = other.background_tint;
-    border_tint     = other.border_tint;
-
-    refresh_parents(true);
+    assign_fields(*this, std::move(other));
+    refresh_parents(false);
     return *this;
 }
 

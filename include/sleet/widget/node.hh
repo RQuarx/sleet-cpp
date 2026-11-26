@@ -259,7 +259,7 @@ namespace sleet::widget
                 return std::forward<W>(widget).release();
         }
 
-        /// An already type-erased widget is copied or moved as-is.
+        /// An already type-erased widget is passed through.
         inline auto take_data(node_data data) -> node_data { return data; }
 
 
@@ -296,7 +296,7 @@ namespace sleet::widget
     { return _impl::take_data(std::forward<W>(widget)); }
 
 
-    /// An already type-erased widget is passed through (moving from rvalues).
+    /// An already type-erased widget is passed through.
     [[nodiscard]]
     inline auto to_data(node_data data) -> node_data
     { return data; }

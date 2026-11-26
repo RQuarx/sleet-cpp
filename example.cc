@@ -61,8 +61,9 @@ namespace
         };
 
 
-        message(kind message_kind = kind::none, std::string message_text = {},
-                float message_value = 0.F)
+        message(kind        message_kind  = kind::none,
+                std::string message_text  = {},
+                float       message_value = 0.F)
             : type { message_kind }, text { std::move(message_text) }, value { message_value }
         {
         }
@@ -154,7 +155,7 @@ namespace
                                          | text_role(font_role::heading) | text_color(0xF3F5F8_rgb),
                                      muted("Every built-in widget in one interactive window.")]
                                 | gap(2.F),
-                            spacer(), badge("v1.3.6")]
+                            spacer(), badge("v1.3.7")]
                     | gap(12.F) | width(sizing::fill()) | valign(align::center);
 
 
@@ -196,8 +197,9 @@ namespace
 
         auto scroll_rows = column() | gap(4.F);
         for (auto i = 1; i <= 8; i++)
-            scroll_rows = scroll_rows[button(std::format("Row {}", i), std::format("scroll_{}", i))
-                                      | width(sizing::fill())];
+            scroll_rows = std::move(
+                scroll_rows)[button(std::format("Row {}", i), std::format("scroll_{}", i))
+                             | width(sizing::fill())];
 
         auto scroll_card = card(
             column()[row()[section_title("Scrollable list"), spacer(),
@@ -255,10 +257,10 @@ namespace
         if (current.menu_open)
         {
             auto popup  = menu() | id("gallery-menu") | placement(0.F, 40.F) | modal("menu_close");
-            popup       = popup[menu_item("Duplicate", "menu_duplicate"),
-                                menu_item("Archive", "menu_archive", true), separator(),
-                                menu_item("Delete", "menu_delete")];
-            menu_holder = menu_holder[std::move(popup)];
+            popup       = std::move(popup)[menu_item("Duplicate", "menu_duplicate"),
+                                           menu_item("Archive", "menu_archive", true), separator(),
+                                           menu_item("Delete", "menu_delete")];
+            menu_holder = std::move(menu_holder)[std::move(popup)];
         }
 
         auto overlay_card = card(
@@ -310,8 +312,8 @@ namespace
 
             auto overlay = floating_box(anchor_point::center, 400) | id("dialog-overlay")
                          | backdrop() | modal("dialog_cancel");
-            overlay      = overlay[std::move(dialog)];
-            root         = root[std::move(overlay)];
+            overlay      = std::move(overlay)[std::move(dialog)];
+            root         = std::move(root)[std::move(overlay)];
         }
 
         return root;

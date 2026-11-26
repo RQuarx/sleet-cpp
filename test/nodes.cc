@@ -39,6 +39,21 @@ const boost::ut::suite node_tests = []
         expect(moved.children[0].parent == &moved);
     };
 
+    "deep copies keep every parent pointer inside the copy"_test = []
+    {
+        auto original = to_data(box()[box()[box()[label("deep")]]]);
+        auto copy     = original;
+
+        const auto *first  = &copy.children[0];
+        const auto *second = &first->children[0];
+        const auto *third  = &second->children[0];
+
+        expect(first->parent == &copy);
+        expect(second->parent == first);
+        expect(third->parent == second);
+        expect(first->parent != &original.children[0]);
+    };
+
     "default and empty widget ids hash consistently"_test = []
     {
         const auto empty          = widget_id {};
