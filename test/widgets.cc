@@ -1,3 +1,4 @@
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -142,11 +143,15 @@ const boost::ut::suite widget_tests = []
     {
         const auto high = slider(2.F, "volume").data_view();
         const auto low  = slider(-1.F, "volume").data_view();
+        const auto nan  = slider(std::numeric_limits<float>::quiet_NaN(), "volume").data_view();
 
         expect(high.control == control_kind::slider);
         expect(high.focusable);
         expect(eq(high.control_value, 1.F));
         expect(eq(low.control_value, 0.F));
+
+        // NaN would otherwise survive std::clamp and poison the thumb position.
+        expect(eq(nan.control_value, 0.F));
         expect(high.children.empty());
 
         // The renderer draws the track, fill, and thumb directly from the

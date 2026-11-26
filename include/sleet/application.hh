@@ -252,8 +252,8 @@ namespace sleet
 
 
         [[nodiscard]]
-        inline auto paints_above(const modal_paint_key &lhs,
-                                 const modal_paint_key &rhs) noexcept -> bool
+        inline auto paints_above(const modal_paint_key &lhs, const modal_paint_key &rhs) noexcept
+            -> bool
         {
             // In-flow content is painted before every floating node.
             if (lhs.floating != rhs.floating) return lhs.floating;
@@ -272,10 +272,13 @@ namespace sleet
         }
 
 
-        inline void scan_modals(const widget::node_data &node, bool              floating,
-                                int floating_z, std::size_t floating_order, std::size_t &order,
+        inline void scan_modals(const widget::node_data  &node,
+                                bool                      floating,
+                                int                       floating_z,
+                                std::size_t               floating_order,
+                                std::size_t              &order,
                                 const widget::node_data *&best,
-                                modal_paint_key         &best_key) noexcept
+                                modal_paint_key          &best_key) noexcept
         {
             if (!effectively_visible(node)) return;
 
@@ -982,12 +985,14 @@ namespace sleet
                 return;
             }
 
-            if (current.tooltip_visible) return;
-
-            if (SDL_GetTicks() - current.tooltip_started < tooltip_delay_ms) return;
-
             const auto *node = current.tree->find(*current.pointer_target);
-            if (node == nullptr) return;
+            if (node == nullptr)
+            {
+                // The hovered widget disappeared when the view was rebuilt.
+                current.tooltip_hover.reset();
+                hide_tooltip(current);
+                return;
+            }
 
             const widget::node_data *owner = nullptr;
             for (const auto *cursor = node; cursor != nullptr; cursor = cursor->parent)
@@ -997,10 +1002,27 @@ namespace sleet
                     break;
                 }
 
-            if (owner == nullptr) return;
+            const auto *bounds = owner != nullptr ? current.layout->find(owner->id) : nullptr;
+            if (bounds == nullptr)
+            {
+                hide_tooltip(current);
+                return;
+            }
 
-            const auto *bounds = current.layout->find(owner->id);
-            if (bounds == nullptr) return;
+            if (current.tooltip_visible)
+            {
+                // Keep the bubble attached when layout moves its owner.
+                if (current.tooltip_text != owner->tooltip_text
+                    or current.tooltip_anchor != *bounds)
+                {
+                    current.tooltip_text   = owner->tooltip_text;
+                    current.tooltip_anchor = *bounds;
+                    current.dirty          = true;
+                }
+                return;
+            }
+
+            if (SDL_GetTicks() - current.tooltip_started < tooltip_delay_ms) return;
 
             current.tooltip_text    = owner->tooltip_text;
             current.tooltip_anchor  = *bounds;
@@ -1025,7 +1047,7 @@ namespace sleet
                 const auto remaining = elapsed >= tooltip_delay_ms
                                          ? Sint32 { 0 }
                                          : static_cast<Sint32>(tooltip_delay_ms - elapsed);
-                timeout = timeout < 0 ? remaining : std::min(timeout, remaining);
+                timeout              = timeout < 0 ? remaining : std::min(timeout, remaining);
             }
 
             return timeout;
@@ -2652,8 +2674,11 @@ namespace sleet
 
             visit(root, visit);
 
+            // Every live widget with a transition has an entry in `output`.
+            // Checking that map is O(1), unlike searching the whole tree for
+            // each stale animation.
             for (auto it = current.interactions.begin(); it != current.interactions.end();)
-                if (root.find(it->first) == nullptr)
+                if (!output.contains(it->first))
                     it = current.interactions.erase(it);
                 else
                     ++it;
@@ -2765,9 +2790,9 @@ namespace sleet
         {
             if (!current.tree) return true;
 
-            auto next_layout = calculate_layout(*current.tree, measure,
-                                                { static_cast<float>(m_width),
-                                                  static_cast<float>(m_height) });
+            auto next_layout
+                = calculate_layout(*current.tree, measure,
+                                   { static_cast<float>(m_width), static_cast<float>(m_height) });
             if (!next_layout)
             {
                 std::println(stderr, "sleet: layout failed: {}", next_layout.error().what());
@@ -2905,11 +2930,15 @@ namespace sleet
                 const auto delta   = std::clamp(elapsed, 0.F, 0.1F);
 
                 if (advance_toasts(delta)) current.dirty = true;
-                update_tooltip(current);
 
                 if (current.view_dirty)
                 {
                     if (!rebuild(current, measure, delta)) return 1;
+
+                    // Layout is current, so the tooltip can follow its owner
+                    // into this frame instead of lagging one behind.
+                    update_tooltip(current);
+
                     if (!present(current, context, delta)) return 1;
                 }
                 else if (current.dirty)
@@ -2918,7 +2947,15 @@ namespace sleet
                         and !reflow(current, measure, delta))
                         return 1;
 
+                    update_tooltip(current);
+
                     if (!present(current, context, delta)) return 1;
+                }
+                else
+                {
+                    // A tooltip delay can expire while the scene is idle.
+                    update_tooltip(current);
+                    if (current.dirty and !present(current, context, delta)) return 1;
                 }
 
                 if (current.dirty)

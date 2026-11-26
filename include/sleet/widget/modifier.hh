@@ -400,8 +400,9 @@ namespace sleet::widget
     [[nodiscard]]
     inline auto control_value(float value)
     {
-        return _impl::make_modifier([value](node_data &data)
-                                    { data.control_value = std::clamp(value, 0.F, 1.F); });
+        return _impl::make_modifier(
+            [value](node_data &data)
+            { data.control_value = std::isfinite(value) ? std::clamp(value, 0.F, 1.F) : 0.F; });
     }
 
     [[nodiscard]]

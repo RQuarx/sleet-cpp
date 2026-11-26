@@ -123,8 +123,7 @@ namespace
     {
         return (static_cast<std::uint32_t>(value.r) << 24U)
              | (static_cast<std::uint32_t>(value.g) << 16U)
-             | (static_cast<std::uint32_t>(value.b) << 8U)
-             | static_cast<std::uint32_t>(value.a);
+             | (static_cast<std::uint32_t>(value.b) << 8U) | static_cast<std::uint32_t>(value.a);
     }
 
 
@@ -165,7 +164,7 @@ namespace
     struct wrap_key_view
     {
         std::string_view text;
-        TTF_Font        *font = nullptr;
+        TTF_Font        *font        = nullptr;
         float            width_limit = -1.F;
     };
 
@@ -190,7 +189,7 @@ namespace
         /// Views into the owning \c wrap_key text. The key lives in a map, so
         /// its string stays put while the entry is cached.
         std::vector<sleet::txt::wrapped_line> lines;
-        std::size_t                            last_used = 0;
+        std::size_t                           last_used = 0;
     };
 
 
@@ -488,8 +487,8 @@ struct sleet::render_context::impl
     std::size_t cache_clock = 0;
 
     std::unordered_map<font_key, TTF_Font *, font_key_hash> fonts;
-    std::map<text_key, text_entry, text_key_less>            text_cache;
-    std::map<wrap_key, wrap_entry, wrap_key_less>            wrap_cache;
+    std::map<text_key, text_entry, text_key_less>           text_cache;
+    std::map<wrap_key, wrap_entry, wrap_key_less>           wrap_cache;
 
 
     impl(SDL_Renderer *sdl_renderer, widget::theme initial_theme)
@@ -851,8 +850,7 @@ struct sleet::render_context::impl
             using iterator = decltype(wrap_cache)::iterator;
             std::vector<iterator> entries;
             entries.reserve(wrap_cache.size());
-            for (auto it = wrap_cache.begin(); it != wrap_cache.end(); ++it)
-                entries.push_back(it);
+            for (auto it = wrap_cache.begin(); it != wrap_cache.end(); ++it) entries.push_back(it);
 
             const auto evict = entries.size() / 4;
             std::nth_element(entries.begin(), entries.begin() + static_cast<std::ptrdiff_t>(evict),
@@ -939,7 +937,10 @@ struct sleet::render_context::impl
         }
 
         auto [it, inserted] = text_cache.emplace(
-            text_key { std::string { text }, font, fg },
+            text_key {
+                .text = std::string { text },
+                   .font = font, .fg = fg
+        },
             text_entry {
                 .texture   = texture,
                 .size      = { width, height },
@@ -1657,8 +1658,9 @@ struct sleet::render_context::impl
         const auto thumb_radius = std::min(widget::slider_thumb_radius * scale,
                                            std::min(physical.size.x, physical.size.y) / 2.F);
         const auto travel       = std::max(0.F, physical.size.x - (2.F * thumb_radius));
-        const auto thumb_center = physical.position.x + thumb_radius
-                                + (std::clamp(node.control_value, 0.F, 1.F) * travel);
+        const auto value
+            = std::isfinite(node.control_value) ? std::clamp(node.control_value, 0.F, 1.F) : 0.F;
+        const auto thumb_center = physical.position.x + thumb_radius + (value * travel);
         const auto fill_width   = thumb_center - physical.position.x;
 
         if (fill_width > 0.F)

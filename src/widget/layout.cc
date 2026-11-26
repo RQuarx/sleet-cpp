@@ -44,6 +44,16 @@ namespace
     constexpr auto size_axis(vec2 value, axis a) noexcept -> float
     { return a == axis::width ? value.x : value.y; }
 
+
+    constexpr void set_axis(vec2 &value, axis a, float amount) noexcept
+    {
+        if (a == axis::width)
+            value.x = amount;
+        else
+            value.y = amount;
+    }
+
+
     [[nodiscard]]
     constexpr auto margin_axis(const edge_insets &m, axis a) noexcept -> float
     { return a == axis::width ? m.horizontal() : m.vertical(); }
@@ -390,7 +400,7 @@ namespace
             float result = m_gap_total;
             for (std::size_t i = 0; i < m_count; i++)
                 if (in_flow(m_node.children[i]))
-                    result += m_sizes[i][static_cast<std::size_t>(m_main)]
+                    result += size_axis(m_sizes[i], m_main)
                             + margin_axis(m_node.children[i].margin, m_main);
             return result;
         }
@@ -505,12 +515,11 @@ namespace
             const auto  cross_align
                 = child.align_self.value_or(m_node.alignment[static_cast<std::size_t>(m_cross)]);
 
-            vec2 position {};
-            position[static_cast<std::size_t>(m_main)]
-                = cursor + leading_margin(child.margin, m_main);
-            position[static_cast<std::size_t>(m_cross)] = size_axis(m_content_position, m_cross)
-                                                        + leading_margin(child.margin, m_cross)
-                                                        + align_offset(cross_align, cross_space);
+            auto position = vec2 {};
+            set_axis(position, m_main, cursor + leading_margin(child.margin, m_main));
+            set_axis(position, m_cross,
+                     size_axis(m_content_position, m_cross) + leading_margin(child.margin, m_cross)
+                         + align_offset(cross_align, cross_space));
             return position;
         }
 
@@ -933,6 +942,7 @@ auto sleet::widget::calculate_layout(const node_data     &root,
 
     layout_result out;
     out.root = { measured_tree.position, measured_tree.size };
+    out.rects.reserve(root.children_amount() + 1);
 
     if (auto res = collect_rects(root, measured_tree, out); !res)
         return std::move(res.error()).unexpected();
