@@ -1,4 +1,4 @@
-test_dependencies = [ dependency('sleet'), dependency('boost.ut') ]
+test_dependencies = [ dependency('sleet'), dependency('boost.ut', include_type: 'system') ]
 
 tests = {
   'application':   'application.cc',

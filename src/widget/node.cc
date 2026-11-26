@@ -43,8 +43,9 @@ namespace
 }
 
 
-node_data::node_data(std::string_view name, std::source_location origin, node_kind kind)
-    : name { name }, origin { origin }, kind { kind }
+node_data::node_data(std::string_view widget_name, std::source_location source,
+                     node_kind node_type)
+    : name { widget_name }, origin { source }, kind { node_type }
 {
 }
 

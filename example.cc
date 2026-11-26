@@ -61,8 +61,9 @@ namespace
         };
 
 
-        message(kind type = kind::none, std::string text = {}, float value = 0.F)
-            : type { type }, text { std::move(text) }, value { value }
+        message(kind message_kind = kind::none, std::string message_text = {},
+                float message_value = 0.F)
+            : type { message_kind }, text { std::move(message_text) }, value { message_value }
         {
         }
 
@@ -153,7 +154,7 @@ namespace
                                          | text_role(font_role::heading) | text_color(0xF3F5F8_rgb),
                                      muted("Every built-in widget in one interactive window.")]
                                 | gap(2.F),
-                            spacer(), badge("v1.3.1")]
+                            spacer(), badge("v1.3.2")]
                     | gap(12.F) | width(sizing::fill()) | valign(align::center);
 
 

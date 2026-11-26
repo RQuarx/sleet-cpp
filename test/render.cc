@@ -87,20 +87,20 @@ const boost::ut::suite render_tests = []
 
             expect(static_cast<bool>(context.render(tree, *layout)));
 
-            auto *pixels = SDL_RenderReadPixels(renderer, nullptr);
-            expect(pixels != nullptr);
-            if (pixels != nullptr)
+            auto *background_pixels = SDL_RenderReadPixels(renderer, nullptr);
+            expect(background_pixels != nullptr);
+            if (background_pixels != nullptr)
             {
                 std::uint8_t r = 0;
                 std::uint8_t g = 0;
                 std::uint8_t b = 0;
                 std::uint8_t a = 0;
-                expect(SDL_ReadSurfacePixel(pixels, 32, 32, &r, &g, &b, &a));
+                expect(SDL_ReadSurfacePixel(background_pixels, 32, 32, &r, &g, &b, &a));
                 expect(r == 0xFF);
                 expect(g == 0x00);
                 expect(b == 0x00);
                 expect(a == 0xFF);
-                SDL_DestroySurface(pixels);
+                SDL_DestroySurface(background_pixels);
             }
 
             // Text completely outside the viewport must not fall back to an

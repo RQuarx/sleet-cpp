@@ -23,8 +23,9 @@ namespace sleet::math
             : top { vertical }, right { horizontal }, bottom { vertical }, left { horizontal }
         {
         }
-        constexpr edge_insets(float top, float right, float bottom, float left) noexcept
-            : top { top }, right { right }, bottom { bottom }, left { left }
+        constexpr edge_insets(float top_value, float right_value, float bottom_value,
+                              float left_value) noexcept
+            : top { top_value }, right { right_value }, bottom { bottom_value }, left { left_value }
         {
         }
 

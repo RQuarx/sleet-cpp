@@ -69,7 +69,7 @@ namespace sleet::widget
         friend constexpr auto operator==(sizing, sizing) noexcept -> bool = default;
 
     private:
-        constexpr sizing(mode mode, float value) noexcept : m_mode { mode }, m_value { value } {}
+        constexpr sizing(mode kind, float value) noexcept : m_mode { kind }, m_value { value } {}
 
 
         mode  m_mode  = mode::fit;

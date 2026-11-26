@@ -436,8 +436,8 @@ struct sleet::render_context::impl
     std::unordered_map<text_key, text_entry, text_key_hash> text_cache;
 
 
-    impl(SDL_Renderer *renderer, widget::theme theme)
-        : renderer { renderer }, theme { std::move(theme) }
+    impl(SDL_Renderer *sdl_renderer, widget::theme initial_theme)
+        : renderer { sdl_renderer }, theme { std::move(initial_theme) }
     {
     }
 
