@@ -1,5 +1,5 @@
 project('sleet', 'cpp',
-        version:         '1.3.0',
+        version:         '1.3.1',
         meson_version:   '>=1.4.0',
         license:         'GPL-3.0-or-later',
         default_options: [ 'cpp_std=c++23', 'warning_level=3' ])

@@ -1029,4 +1029,36 @@ const boost::ut::suite modal_hit_tests = []
 };
 
 
+const boost::ut::suite interaction_target_tests = []
+{
+    using namespace boost::ut;
+
+    "hover targets stay local to the hovered widget"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto tree
+            = to_data(column()[button("One", "one") | id("one"), button("Two", "two") | id("two")]);
+        expect(static_cast<bool>(tree.finalize()));
+
+        const auto progress = sleet::_impl::interaction_targets(tree, widget_id { "one" },
+                                                                std::nullopt, std::nullopt, false);
+
+        // The renderer inherits a target's progress in its descendants. If
+        // ancestors were marked too, the root would hand hover to every
+        // widget in the window.
+        expect(eq(progress.size(), std::size_t { 1 }));
+        expect(progress.contains(widget_id { "one" }));
+        expect(!progress.contains(widget_id { "two" }));
+
+        if (const auto it = progress.find(widget_id { "one" }); it != progress.end())
+        {
+            expect(it->second.hover == 1.F);
+            expect(it->second.press == 0.F);
+            expect(it->second.focus == 0.F);
+        }
+    };
+};
+
+
 auto main() -> int {}

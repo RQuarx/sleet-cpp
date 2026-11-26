@@ -358,6 +358,31 @@ namespace sleet
 
             return hit_test_subtree(root, layout, point);
         }
+
+
+        /// Builds the per-frame interaction targets for the renderer. Hover and
+        /// press are recorded on the target widget only. The renderer already
+        /// inherits progress from a node's ancestors, which lets a button's
+        /// contents follow the button; marking ancestors here as well would
+        /// leak the hover state from the root into every sibling in the tree.
+        [[nodiscard]]
+        inline auto interaction_targets(const widget::node_data                &root,
+                                        const std::optional<widget::widget_id> &hovered,
+                                        const std::optional<widget::widget_id> &pressed,
+                                        const std::optional<widget::widget_id> &focused,
+                                        bool                                    show_focus)
+            -> std::unordered_map<widget::widget_id, interaction_progress>
+        {
+            auto output = std::unordered_map<widget::widget_id, interaction_progress> {};
+
+            if (hovered and root.find(*hovered) != nullptr) output[*hovered].hover = 1.F;
+            if (pressed and root.find(*pressed) != nullptr) output[*pressed].press = 1.F;
+
+            if (show_focus and focused and root.find(*focused) != nullptr)
+                output[*focused].focus = 1.F;
+
+            return output;
+        }
     }
 
 
@@ -2459,30 +2484,14 @@ namespace sleet
                              std::unordered_map<widget::widget_id, interaction_progress> &output)
             -> bool
         {
-            output.clear();
-
-            // Hover and press apply to the target and its ancestors, matching
-            // the renderer's inherited feedback for action widgets.
-            const auto mark =
-                [&](const std::optional<widget::widget_id> &id, float interaction_progress::*member)
-            {
-                if (!id) return;
-
-                const auto *node = root.find(*id);
-                for (const auto *cursor = node; cursor != nullptr; cursor = cursor->parent)
-                    (output[cursor->id].*member) = 1.F;
-            };
-
-            mark(current.hovered, &interaction_progress::hover);
-            mark(current.pressed, &interaction_progress::press);
-
             const auto *focused = current.focused ? root.find(*current.focused) : nullptr;
             const auto  show_focus
                 = focused != nullptr
                && (current.focus_visible or focused->control == widget::control_kind::text_input);
 
             // Focus is drawn only on the focused widget, never its ancestors.
-            if (show_focus) output[focused->id].focus = 1.F;
+            output = _impl::interaction_targets(root, current.hovered, current.pressed,
+                                                current.focused, show_focus);
 
             auto active = false;
 
