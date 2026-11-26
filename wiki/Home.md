@@ -15,17 +15,27 @@ the window, renderer, and event loop.
 - Widget trees are ordinary values. Modifiers compose with `operator|`.
 - Flexbox-style layout with `fit`, `grow`, `fill`, and `fixed` sizing, plus
   margins, padding, gaps, alignment, justification, and per-child flex weights.
+- Floating overlays (`floating`, `placement`, `z_index`), clipping, and
+  wheel-scrollable viewports.
+- Stable generated widget ids derived from the call site, with explicit `id` or
+  `key` overrides.
 - Text is measured at its intrinsic size and wrapped using Unicode line-break
-  rules.
-- Rendering uses SDL3, caches fonts and text textures, clips to the viewport,
-  and applies theme colors for hover, press, and focus states.
-- Built-in controls for all of the widgets listed above.
+  rules. Editing is grapheme-aware and supports word movement, selection,
+  undo/redo, and IME composition.
+- Rendering uses SDL3 in physical pixels for high-DPI windows, with
+  antialiased rounded primitives, cached fonts and text textures, clipping, and
+  theme colors for hover, press, focus, and disabled states.
+- Built-in controls for all of the widgets listed above, including keyboard
+  combo-box navigation and one-open-popup behavior.
 - An Elm-style `application<State, Message>` runtime with boot, update, view,
   event-mapping, and subscription callbacks, plus focus traversal, text
-  editing, combo-box selection, and slider dragging.
+  editing, combo-box selection, slider dragging, and scrolling.
 - `ustring` and `ustring_view` keep UTF-8 valid and mutate by code point.
 - Layout can be tested without a window because the engine accepts a
   `text_measurer` callback.
+
+Accessibility-tree integration and bidirectional text are not implemented; see
+[[Controls]] and [[Rendering-and-Themes]] for the current boundaries.
 
 ## Documentation
 

@@ -53,7 +53,56 @@ deterministic callback instead.
 
 ## Identity
 
-`finalize()` assigns stable path-based ids to nodes without an explicit id.
-Explicit ids are checked for duplicates. Widget ids are the keys used by
+`finalize()` assigns stable ids to nodes without an explicit id. A generated id
+combines the node kind, its name, its source location, and an occurrence number
+within its parent, so inserting or reordering an unrelated sibling does not
+renumber existing widgets. Combo options also include their label in the key,
+which keeps identity attached to the option value rather than its index.
+
+Use `id("name")` or `key("name")` when an id must be fully explicit, especially
+inside loops. Explicit ids are checked for duplicates, and `finalize()` fails
+before layout when two nodes collide. Widget ids are the keys used by
 `layout_result::find`, hit testing, and hover/press state; see [[Controls]] for
 how the runtime uses them.
+
+## Floating overlays
+
+`floating()` takes a node out of its parent's flow. Its size is still measured,
+but it consumes no space and does not affect the parent's intrinsic size.
+`placement(x, y)` positions it relative to the parent's content box, and
+`z_index(n)` controls paint order:
+
+```cpp
+auto menu = column()[...]
+          | floating()
+          | placement(0.F, 38.F)
+          | z_index(100);
+```
+
+Floating nodes are painted after all in-flow content, in ascending `z_index`
+order. They are hit-tested first, in reverse paint order, so a popup receives
+pointer input before the content underneath it. `layout_result::floating` lists
+the visible overlays in paint order as `{ id, z_index }` entries; storing ids
+instead of pointers lets a layout safely outlive its tree.
+
+## Scrolling and clipping
+
+`clip_children()` clips descendants to the node's border box. Clipping applies
+to both rendering and hit testing: a child outside every clipping ancestor's
+bounds is neither drawn nor clickable.
+
+`scrollable()` makes a node respond to wheel events. The runtime keeps a scroll
+offset per widget, applies it after layout by translating the subtree, and
+clamps it to the measured content bounds. Nested scroll containers are resolved
+bottom-up, so an outer viewport also moves already-panned inner content. The
+layout pass itself is always unscrolled; scrolling is runtime state, like focus
+and text selection.
+
+A typical scroll viewport combines both modifiers:
+
+```cpp
+column()[rows...] | height(240.F) | clip() | scrollable();
+```
+
+See [[Application-Runtime]] for wheel dispatch and [[Rendering-and-Themes]] for
+the painting side of clipping and overlays.

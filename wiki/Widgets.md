@@ -26,6 +26,18 @@ Built-in widgets are thin compositions of those primitives:
 | `spacer()` | Flexible blank area |
 | `badge("text")` | Compact accent-colored label |
 
+Combo options derive their generated ids from their labels, so filtering or
+reordering a list keeps each option's identity. When the labels themselves can
+change, pass the overload with explicit ids:
+
+```cpp
+combo_box(current.color,
+          { "Red", "Green", "Blue" },
+          { widget_id { "color-red" }, widget_id { "color-green" },
+            widget_id { "color-blue" } },
+          "color");
+```
+
 ```cpp
 column()[text_input(current.name, "name", "Type your name..."),
          combo_box(current.color, { "Red", "Green", "Blue" }, "color", "Pick one"),
@@ -53,7 +65,7 @@ box()[label("Hello")]
 
 | Modifier | Effect |
 | --- | --- |
-| `id("name")` | Explicit stable widget id |
+| `id("name")`, `key("name")` | Explicit stable widget id |
 | `width`, `height`, `size` | Fixed or `sizing` values |
 | `hexpand`, `vexpand` | `sizing::fill` on one axis |
 | `flex(weight)` | Relative share when growing or filling |
@@ -63,12 +75,22 @@ box()[label("Hello")]
 | `align_self(align)` | Override alignment for one child |
 | `justify_content` | Main-axis distribution in a row/column |
 | `visible(bool)` | Hide a subtree |
+| `floating(bool)`, `placement(x, y)`, `z_index(n)` | Overlay positioning outside normal flow |
+| `clip(bool)`, `clip_children(bool)` | Clip descendants to this node's bounds |
+| `scrollable(bool)` | Wheel-scroll a clipped viewport |
+| `disabled(bool)` | Remove a subtree from focus and input; disabled widgets are not pointer targets |
 | `text_size`, `text_weight`, `text_role`, `text_color`, `text_decoration` | Text styling |
 | `background`, `foreground`, `border`, `border_width` | Visual styling |
+| `radius(px)` | Override the theme's corner radius |
 | `on_click("action")` | Attach an action name for event mapping |
 | `focusable()` | Include the widget in the Tab focus order |
 | `tone_of(tone)`, `variant(button_variant)` | Resolve semantic colors from the theme |
 | `control(kind)`, `checked(bool)`, `control_value(float)`, `placeholder(text)` | Control metadata; built-in widgets set these for you |
+
+Nodes without an explicit id receive a generated id from their kind, name, call
+site, and per-parent occurrence. The call site is part of the key, so inserting
+an unrelated sibling does not renumber existing widgets. See [[Layout]] for
+overlay and scrolling rules.
 
 `math::edge_insets` uses CSS order: top, right, bottom, left. The two-argument
 constructor is `(vertical, horizontal)`.

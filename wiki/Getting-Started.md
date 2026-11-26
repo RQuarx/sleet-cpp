@@ -39,6 +39,18 @@ with SDL's dummy drivers:
 SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software ./build/sleet-example
 ```
 
+## High-DPI and text input
+
+Widget sizes, margins, and pointer coordinates are logical window points. The
+runtime reads the renderer's physical output size and rasterizes fonts and
+shapes at that scale, so a high-DPI window looks sharp without any application
+changes. The renderer does not enable SDL's logical presentation.
+
+Text inputs work with the platform IME: composition text is shown as preedit
+and replaced on commit. Editing is grapheme-aware, and the usual word movement,
+selection, clipboard, undo, and redo shortcuts are built in. See [[Controls]]
+for the full keyboard contract.
+
 ## A complete counter app
 
 ```cpp

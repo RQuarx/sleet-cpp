@@ -3,6 +3,7 @@
 #include <optional>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "sleet/math/rect.hh"
 #include "sleet/math/vec2.hh"
@@ -19,11 +20,23 @@ namespace sleet::widget
         auto(std::string_view, const font_spec &, std::optional<float>)->kei::result<math::vec2>>;
 
 
+    struct floating_entry
+    {
+        widget_id id;
+        int       z_index = 0;
+    };
+
+
     struct layout_result
     {
         math::rect root;
 
         std::unordered_map<widget_id, math::rect> rects;
+
+        /// Floating nodes in paint order (ascending z-index, then document
+        /// order). They are painted above all in-flow content. IDs are stored
+        /// instead of pointers so a layout can safely outlive its tree.
+        std::vector<floating_entry> floating;
 
 
         [[nodiscard]]

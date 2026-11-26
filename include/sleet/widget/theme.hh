@@ -1,6 +1,7 @@
 #pragma once
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "sleet/color.hh"
 #include "sleet/widget/style.hh"
@@ -35,6 +36,10 @@ namespace sleet::widget
         font_face heading;
         font_face caption;
         font_face code;
+
+        /// Optional faces tried in order when the selected role lacks a glyph.
+        /// The first face that covers the whole text run is used.
+        std::vector<font_face> fallbacks;
 
 
         [[nodiscard]]
@@ -89,6 +94,19 @@ namespace sleet::widget
 
         /// The color for placeholders and secondary text.
         std::optional<color> muted;
+
+        /// Colors used for disabled widgets.
+        colors disabled;
+
+        /// The border color for disabled widgets.
+        std::optional<color> disabled_border;
+
+        /// The default corner radius for interactive controls, in logical
+        /// pixels. A widget can override it with \c style::corner_radius.
+        float radius = 6.F;
+
+        /// The radius used by small indicators such as checkboxes.
+        float small_radius = 3.F;
 
         font_config fonts;
 

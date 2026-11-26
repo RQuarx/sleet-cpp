@@ -1,9 +1,46 @@
+#include <cstddef>
+#include <format>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <unordered_map>
 
 #include "sleet/widget/node.hh"
 
 
 using sleet::widget::node_data;
+
+
+namespace
+{
+    /// A compact, deterministic suffix for generated ids. The call site is
+    /// stable across re-renders, so inserting or reordering unrelated siblings
+    /// no longer changes the identity of a widget.
+    [[nodiscard]]
+    auto origin_suffix(const std::source_location &origin) -> std::string
+    {
+        auto file = std::string_view { origin.file_name() == nullptr ? "" : origin.file_name() };
+        if (const auto separator = file.find_last_of("/\\"); separator != std::string_view::npos)
+            file.remove_prefix(separator + 1);
+
+        return std::format("{}:{}:{}", file, origin.line(), origin.column());
+    }
+
+
+    [[nodiscard]]
+    auto generated_base(const node_data &node) -> std::string
+    {
+        auto base = std::format("{}::{}@{}", sleet::widget::node_kind_to_string(node.kind),
+                                node.name, origin_suffix(node.origin));
+
+        // Combo options are commonly reordered or filtered. Including their
+        // label keeps the identity attached to the value instead of its index.
+        if (node.control == sleet::widget::control_kind::combo_option and !node.text.empty())
+            base += std::format("#{}", node.text);
+
+        return base;
+    }
+}
 
 
 node_data::node_data(std::string_view name, std::source_location origin, node_kind kind)
@@ -18,8 +55,10 @@ node_data::node_data(const node_data &other)
       origin { other.origin }, font { other.font }, gap { other.gap },
       alignment { other.alignment }, main_axis { other.main_axis }, align_self { other.align_self },
       flex { other.flex }, kind { other.kind }, visual { other.visual }, visible { other.visible },
-      control { other.control }, tint { other.tint }, variant { other.variant },
-      focusable { other.focusable }, checked { other.checked },
+      floating { other.floating }, placement { other.placement }, z_index { other.z_index },
+      clip_children { other.clip_children }, scrollable { other.scrollable },
+      disabled { other.disabled }, control { other.control }, tint { other.tint },
+      variant { other.variant }, focusable { other.focusable }, checked { other.checked },
       control_value { other.control_value }, placeholder { other.placeholder }
 { refresh_parents(true); }
 
@@ -31,8 +70,10 @@ node_data::node_data(node_data &&other) noexcept
       padding { other.padding }, origin { other.origin }, font { other.font }, gap { other.gap },
       alignment { other.alignment }, main_axis { other.main_axis }, align_self { other.align_self },
       flex { other.flex }, kind { other.kind }, visual { other.visual }, visible { other.visible },
-      control { other.control }, tint { other.tint }, variant { other.variant },
-      focusable { other.focusable }, checked { other.checked },
+      floating { other.floating }, placement { other.placement }, z_index { other.z_index },
+      clip_children { other.clip_children }, scrollable { other.scrollable },
+      disabled { other.disabled }, control { other.control }, tint { other.tint },
+      variant { other.variant }, focusable { other.focusable }, checked { other.checked },
       control_value { other.control_value }, placeholder { std::move(other.placeholder) }
 { refresh_parents(true); }
 
@@ -59,6 +100,13 @@ auto node_data::operator=(const node_data &other) -> node_data &
     kind       = other.kind;
     visual     = other.visual;
     visible    = other.visible;
+
+    floating      = other.floating;
+    placement     = other.placement;
+    z_index       = other.z_index;
+    clip_children = other.clip_children;
+    scrollable    = other.scrollable;
+    disabled      = other.disabled;
 
     control       = other.control;
     tint          = other.tint;
@@ -95,6 +143,13 @@ auto node_data::operator=(node_data &&other) noexcept -> node_data &
     kind       = other.kind;
     visual     = other.visual;
     visible    = other.visible;
+
+    floating      = other.floating;
+    placement     = other.placement;
+    z_index       = other.z_index;
+    clip_children = other.clip_children;
+    scrollable    = other.scrollable;
+    disabled      = other.disabled;
 
     control       = other.control;
     tint          = other.tint;
@@ -188,23 +243,30 @@ auto node_data::finalize_impl(std::unordered_set<std::string> &seen, std::string
     if (id.empty())
     {
         if (parent_path.empty())
-            id = widget_id { std::format("{}::{}", node_kind_to_string(kind), name) };
+            id = widget_id { generated_base(*this) };
         else
-            id = widget_id { std::format("{}/{}::{}", parent_path, node_kind_to_string(kind),
-                                         name) };
+            id = widget_id { std::format("{}/{}", parent_path, generated_base(*this)) };
     }
 
     if (!seen.insert(id.str()).second)
         return sleet::error { "Duplicate widget id \"{}\".", id.view() }.unexpected();
 
-    for (std::size_t i = 0; i < children.size(); i++)
+    // Occurrence numbers are scoped to one parent and one call site. Widgets
+    // created in a loop are still distinguishable, but a widget from a
+    // different call site never shifts an existing id.
+    std::unordered_map<std::string, std::size_t> occurrences;
+
+    for (auto &child : children)
     {
-        auto &child  = children[i];
         child.parent = this;
 
         if (child.id.empty())
-            child.id = widget_id { std::format("{}/{}::{}-{}", id.view(),
-                                               node_kind_to_string(child.kind), child.name, i) };
+        {
+            const auto base   = generated_base(child);
+            const auto count  = occurrences[base]++;
+            const auto suffix = count == 0 ? std::string {} : std::format("#{}", count);
+            child.id          = widget_id { std::format("{}/{}{}", id.view(), base, suffix) };
+        }
 
         if (auto result = child.finalize_impl(seen, id.view()); !result)
             return std::move(result.error()).unexpected();

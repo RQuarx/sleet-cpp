@@ -164,6 +164,97 @@ const boost::ut::suite render_tests = []
                 context.set_focused(std::nullopt);
                 context.set_text_selection(std::nullopt, {});
             }
+
+            // Floating content is painted above normal flow, even when it
+            // extends past its parent's bounds.
+            context.set_viewport({ 64.F, 64.F });
+
+            auto overlay = to_data(column()[box() | size(64.F, 20.F) | background(0x00FF00_rgb),
+                                            box() | size(64.F, 20.F) | background(0xFF0000_rgb)
+                                                | floating() | placement(0.F, 30.F)]
+                                   | size(64.F, 64.F));
+            expect(static_cast<bool>(overlay.finalize()));
+
+            auto overlay_layout = calculate_layout(overlay, measure, { 64.F, 64.F });
+            expect(static_cast<bool>(overlay_layout));
+            if (overlay_layout)
+            {
+                expect(static_cast<bool>(context.render(overlay, *overlay_layout)));
+
+                auto *pixels = SDL_RenderReadPixels(renderer, nullptr);
+                expect(pixels != nullptr);
+                if (pixels != nullptr)
+                {
+                    std::uint8_t r = 0;
+                    std::uint8_t g = 0;
+                    std::uint8_t b = 0;
+                    std::uint8_t a = 0;
+                    expect(SDL_ReadSurfacePixel(pixels, 32, 35, &r, &g, &b, &a));
+                    expect(r == 0xFF);
+                    expect(g == 0x00);
+                    expect(b == 0x00);
+                    SDL_DestroySurface(pixels);
+                }
+            }
+
+            // An empty clip box must disable drawing rather than fall back to
+            // SDL's "empty clip means no clipping" behavior.
+            auto empty_clip = to_data(column()[box() | size(20.F) | background(0xFF0000_rgb)]
+                                      | size(0.F) | clip());
+            expect(static_cast<bool>(empty_clip.finalize()));
+
+            auto empty_clip_layout = calculate_layout(empty_clip, measure, { 64.F, 64.F });
+            expect(static_cast<bool>(empty_clip_layout));
+            if (empty_clip_layout)
+            {
+                expect(static_cast<bool>(context.render(empty_clip, *empty_clip_layout)));
+
+                auto *pixels = SDL_RenderReadPixels(renderer, nullptr);
+                expect(pixels != nullptr);
+                if (pixels != nullptr)
+                {
+                    std::uint8_t r = 0;
+                    std::uint8_t g = 0;
+                    std::uint8_t b = 0;
+                    std::uint8_t a = 0;
+                    expect(SDL_ReadSurfacePixel(pixels, 5, 5, &r, &g, &b, &a));
+                    expect(!(r == 0xFF and g == 0x00 and b == 0x00))
+                        << "a child escaped an empty clip";
+                    SDL_DestroySurface(pixels);
+                }
+            }
+
+            // Explicit radii round the corners of a normal (non-root) node.
+            auto rounded
+                = to_data(column()[box() | size(64.F) | background(0xFF0000_rgb) | radius(16.F)]
+                          | size(64.F, 64.F));
+            expect(static_cast<bool>(rounded.finalize()));
+
+            auto rounded_layout = calculate_layout(rounded, measure, { 64.F, 64.F });
+            expect(static_cast<bool>(rounded_layout));
+            if (rounded_layout)
+            {
+                expect(static_cast<bool>(context.render(rounded, *rounded_layout)));
+
+                auto *pixels = SDL_RenderReadPixels(renderer, nullptr);
+                expect(pixels != nullptr);
+                if (pixels != nullptr)
+                {
+                    std::uint8_t r = 0;
+                    std::uint8_t g = 0;
+                    std::uint8_t b = 0;
+                    std::uint8_t a = 0;
+                    expect(SDL_ReadSurfacePixel(pixels, 1, 1, &r, &g, &b, &a));
+                    expect(!(r == 0xFF and g == 0x00 and b == 0x00))
+                        << "the rounded corner was filled";
+
+                    expect(SDL_ReadSurfacePixel(pixels, 32, 32, &r, &g, &b, &a));
+                    expect(r == 0xFF);
+                    expect(g == 0x00);
+                    expect(b == 0x00);
+                    SDL_DestroySurface(pixels);
+                }
+            }
         }
         catch (...)
         {

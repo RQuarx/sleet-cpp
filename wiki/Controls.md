@@ -2,8 +2,9 @@
 
 Control widgets are ordinary node trees with a small amount of runtime state.
 The application owns the values; the runtime owns focus, the caret and
-selection, open combo boxes, and slider dragging. Widget ids are path-based, so
-that state survives ordinary view rebuilds.
+selection, IME composition, undo/redo history, open combo boxes, scroll
+offsets, and slider dragging. Widget ids are stable across ordinary view
+rebuilds, so that state survives a new tree each frame.
 
 ## Events
 
@@ -21,6 +22,8 @@ Buttons, checkboxes, toggles, and radio buttons report their `action` in a
 A text input reports `text_edit` while editing and `submit` on Enter. A combo
 box reports `selection_changed` with the option text. The runtime sets the
 control event's `action` from the `on_click` action supplied to the factory.
+`text_edit` is also emitted after undo, redo, paste, cut, and IME commit, so
+the application state always reflects what the field shows.
 
 ```cpp
 case event::kind::text_edit:
@@ -42,18 +45,50 @@ case event::kind::activate:
 
 ## Keyboard
 
-Tab and Shift+Tab move focus through visible, focusable widgets. A focused text
-input supports typing, arrows, Home and End, Shift-selection, Ctrl+A, Ctrl+C,
-Ctrl+X, and Ctrl+V. Escape clears text focus. Focused buttons and selection
-controls activate with Enter or Space; focused sliders change value with the
-arrow keys.
+Tab and Shift+Tab move focus through visible, focusable widgets. Disabled
+subtrees are skipped entirely.
+
+A focused text input supports:
+
+- typing and IME composition; the composition is drawn as preedit text and
+  replaced, not appended, when the platform commits it;
+- grapheme-aware Left/Right, Home/End, and Shift-selection;
+- word movement and word deletion with Ctrl or Alt plus Left/Right/Backspace/
+  Delete;
+- Ctrl/Cmd+A, C, X, and V for select-all, copy, cut, and paste;
+- Ctrl/Cmd+Z for undo and Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y for redo;
+- double-click to select a word and triple-click to select the whole value;
+- Enter to submit and Escape to cancel a composition or clear focus.
+
+Focused buttons and selection controls activate with Enter or Space; focused
+sliders change value with the arrow keys. A focused combo box opens with Enter,
+Space, or an arrow key. Up/Down and Home/End move through its options, Enter or
+Space chooses one, and Escape or Tab closes the list. Only one combo box is open
+at a time; opening another closes the first, and Tab returns focus to the header
+before continuing traversal.
+
+## Pointer and disabled state
 
 The pointer behavior is symmetric: a mouse release activates an action only
 when the press began on the same action widget, so dragging off a button
-cancels the click. Checkbox and radio indicators are visual parts of their
-parent widget, so pressing either the indicator or the label toggles the
-control. Clicking outside an open combo closes it, and clicking a slider starts
-a drag that continues until the left button is released.
+cancels the click. Releasing outside the window, losing focus, or a view
+rebuild that removes the pressed widget clears the drag state. Checkbox and
+radio indicators are visual parts of their parent widget, so pressing either
+the indicator or the label toggles the control. Clicking outside an open combo
+closes it, and clicking a slider starts a drag that continues until the left
+button is released. The wheel scrolls the nearest `scrollable()` ancestor.
+
+`disabled()` removes a subtree from the Tab order and keyboard input, and
+prevents its widgets from becoming pointer targets. It paints the subtree with
+the theme's disabled colors. Disabled combo options are skipped by arrow
+navigation.
+
+## Known limitations
+
+The runtime does not expose an accessibility tree or screen-reader semantics,
+and text layout does not implement bidirectional reordering or full complex
+script shaping. Those features need platform integration and a shaping engine
+beyond SDL_ttf; treat them as future work rather than supported behavior.
 
 See [[Application-Runtime]] for how events reach `on_event` and
 [[Rendering-and-Themes]] for focus and selection drawing.

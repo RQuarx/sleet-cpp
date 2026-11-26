@@ -86,6 +86,27 @@ namespace sleet::widget
         style     visual;
         bool      visible = true;
 
+        /// Floating nodes are taken out of the parent's flow, positioned by
+        /// \c placement relative to the parent's content box, and painted above
+        /// all in-flow content. Combo-box options use this to form a popup.
+        bool       floating = false;
+        math::vec2 placement { 0.F, 0.F };
+
+        /// Floating nodes are painted in ascending z-order. In-flow content is
+        /// painted first, so any floating node covers it.
+        int z_index = 0;
+
+        /// Clips descendants to this node's border box when true. Hit testing
+        /// follows the same rule.
+        bool clip_children = false;
+
+        /// Allows the runtime to pan descendants with the mouse wheel. Combine
+        /// with \c clip_children and a fixed size to build a scroll viewport.
+        bool scrollable = false;
+
+        /// Disabled widgets stay visible but ignore pointer and keyboard input.
+        bool disabled = false;
+
         /// Built-in behaviour that the runtime updates between frames.
         control_kind control = control_kind::none;
         tone         tint    = tone::none;
@@ -150,6 +171,8 @@ namespace sleet::widget
         [[nodiscard]] auto is_row() const noexcept -> bool { return kind == node_kind::row; }
         [[nodiscard]] auto is_column() const noexcept -> bool { return kind == node_kind::column; }
         [[nodiscard]] auto is_text() const noexcept -> bool { return kind == node_kind::text; }
+        [[nodiscard]] auto is_floating() const noexcept -> bool { return floating; }
+        [[nodiscard]] auto is_disabled() const noexcept -> bool { return disabled; }
 
     private:
         auto finalize_impl(std::unordered_set<std::string> &seen, std::string_view parent_path)

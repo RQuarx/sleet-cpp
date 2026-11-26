@@ -63,6 +63,13 @@ namespace
     constexpr auto is_stacked(const node_data &node, axis a) noexcept -> bool
     { return (node.is_row() and a == axis::width) or (node.is_column() and a == axis::height); }
 
+
+    /// Floating children are measured but do not participate in their parent's
+    /// intrinsic size or flow.
+    [[nodiscard]]
+    constexpr auto in_flow(const node_data &node) noexcept -> bool
+    { return node.visible and !node.floating; }
+
     [[nodiscard]]
     auto align_offset(align alignment, float free_space) noexcept -> float
     {
@@ -172,7 +179,7 @@ namespace
             for (std::size_t i = 0; i < node.children.size(); i++)
             {
                 const auto &child = node.children[i];
-                if (!child.visible) continue;
+                if (!in_flow(child)) continue;
                 visible_count++;
 
                 if (is_stacked(node, a))
@@ -292,7 +299,7 @@ namespace
                 const auto &child = m_node.children[i];
                 m_sizes[i]        = m_result.children[i].intrinsic;
 
-                if (!child.visible) continue;
+                if (!in_flow(child)) continue;
                 m_visible_count++;
 
                 const auto main_size = child.size[static_cast<std::size_t>(m_main)];
@@ -323,7 +330,7 @@ namespace
             for (std::size_t i = 0; i < m_count; i++)
             {
                 const auto &child = m_node.children[i];
-                if (!child.visible) continue;
+                if (!in_flow(child)) continue;
 
                 const auto available_width
                     = m_cross_fit
@@ -344,7 +351,7 @@ namespace
         {
             float result = m_gap_total;
             for (std::size_t i = 0; i < m_count; i++)
-                if (m_node.children[i].visible)
+                if (in_flow(m_node.children[i]))
                     result += m_sizes[i][static_cast<std::size_t>(m_main)]
                             + margin_axis(m_node.children[i].margin, m_main);
             return result;
@@ -388,7 +395,7 @@ namespace
             if (!m_node.is_row()) return {};
 
             for (std::size_t i = 0; i < m_count; i++)
-                if (m_node.children[i].visible)
+                if (in_flow(m_node.children[i]))
                     if (auto res
                         = remeasure_text(m_node.children[i], m_sizes[i], m_measure, std::nullopt);
                         !res)
@@ -404,7 +411,7 @@ namespace
             {
                 float content = m_gap_total;
                 for (std::size_t i = 0; i < m_count; i++)
-                    if (m_node.children[i].visible)
+                    if (in_flow(m_node.children[i]))
                         content += m_sizes[i][static_cast<std::size_t>(m_main)]
                                  + margin_axis(m_node.children[i].margin, m_main);
 
@@ -417,7 +424,7 @@ namespace
 
             float content = 0.F;
             for (std::size_t i = 0; i < m_count; i++)
-                if (m_node.children[i].visible)
+                if (in_flow(m_node.children[i]))
                     content
                         = std::max(content, m_sizes[i][static_cast<std::size_t>(m_cross)]
                                                 + margin_axis(m_node.children[i].margin, m_cross));
@@ -477,7 +484,7 @@ namespace
             {
                 occupied_size = m_gap_total;
                 for (std::size_t i = 0; i < m_count; i++)
-                    if (m_node.children[i].visible)
+                    if (in_flow(m_node.children[i]))
                         occupied_size += m_result.children[i].size[static_cast<std::size_t>(m_main)]
                                        + margin_axis(m_node.children[i].margin, m_main);
             }
@@ -490,7 +497,7 @@ namespace
             for (std::size_t i = 0; i < m_count; i++)
             {
                 const auto &child = m_node.children[i];
-                if (!child.visible) continue;
+                if (!in_flow(child)) continue;
 
                 const auto size     = final_pass ? m_result.children[i].size : m_sizes[i];
                 const auto position = child_position(i, size, cursor);
@@ -519,7 +526,7 @@ namespace
             float final_cross = 0.F;
 
             for (std::size_t i = 0; i < m_count; i++)
-                if (m_node.children[i].visible)
+                if (in_flow(m_node.children[i]))
                 {
                     final_main += m_result.children[i].size[static_cast<std::size_t>(m_main)]
                                 + margin_axis(m_node.children[i].margin, m_main);
@@ -599,7 +606,7 @@ namespace
             for (std::size_t i = 0; i < m_count; i++)
             {
                 const auto &child = m_node.children[i];
-                if (!child.visible) continue;
+                if (!in_flow(child)) continue;
 
                 vec2 size = m_result.children[i].intrinsic;
 
@@ -636,7 +643,7 @@ namespace
             {
                 float content = 0.F;
                 for (std::size_t i = 0; i < m_count; i++)
-                    if (m_node.children[i].visible)
+                    if (in_flow(m_node.children[i]))
                         content = std::max(
                             content,
                             m_sizes[i].x + margin_axis(m_node.children[i].margin, axis::width));
@@ -649,7 +656,7 @@ namespace
 
             float content = 0.F;
             for (std::size_t i = 0; i < m_count; i++)
-                if (m_node.children[i].visible)
+                if (in_flow(m_node.children[i]))
                     content = std::max(content,
                                        m_sizes[i].y
                                            + margin_axis(m_node.children[i].margin, axis::height));
@@ -683,7 +690,7 @@ namespace
             for (std::size_t i = 0; i < m_count; i++)
             {
                 const auto &child = m_node.children[i];
-                if (!child.visible) continue;
+                if (!in_flow(child)) continue;
 
                 const auto size     = final_pass ? m_result.children[i].size : m_sizes[i];
                 const auto position = child_position(i, size);
@@ -708,7 +715,7 @@ namespace
             float final_height = 0.F;
 
             for (std::size_t i = 0; i < m_count; i++)
-                if (m_node.children[i].visible)
+                if (in_flow(m_node.children[i]))
                 {
                     final_width = std::max(
                         final_width, m_result.children[i].size.x
@@ -740,6 +747,48 @@ namespace
                      vec2                 content_size,
                      const text_measurer &measure) -> kei::result<>
     { return box_arrangement { node, result, content_position, content_size, measure }.run(); }
+
+
+    /// Positions floating children after the in-flow content has a resolved
+    /// size. Floating children use their intrinsic height unless it is fixed;
+    /// fill and grow only stretch the horizontal axis so a popup does not
+    /// become as tall as its parent.
+    [[nodiscard]]
+    auto arrange_floating_children(const node_data     &node,
+                                   measured            &result,
+                                   vec2                 content_position,
+                                   vec2                 content_size,
+                                   const text_measurer &measure) -> kei::result<>
+    {
+        for (std::size_t i = 0; i < node.children.size(); i++)
+        {
+            const auto &child = node.children[i];
+            if (!child.visible or !child.floating) continue;
+
+            auto size = result.children[i].intrinsic;
+
+            if (child.size.x.is_fixed())
+                size.x = child.size.x.get_fixed_size();
+            else if (child.size.x.is_fill() or child.size.x.is_grow())
+                size.x = clamp0(content_size.x - child.margin.horizontal());
+
+            if (child.size.y.is_fixed()) size.y = child.size.y.get_fixed_size();
+
+            // A floating text node that fills its parent still needs to wrap at
+            // the resolved width, just like an in-flow text child.
+            if (auto res = remeasure_text(child, size, measure, std::optional<float> { size.x });
+                !res)
+                return res;
+
+            const auto position
+                = content_position + child.placement + vec2 { child.margin.left, child.margin.top };
+
+            if (auto res = arrange(child, result.children[i], position, size, measure); !res)
+                return res;
+        }
+
+        return {};
+    }
 
     auto arrange(const node_data     &node,
                  measured            &result,
@@ -774,9 +823,17 @@ namespace
         };
 
         if (node.is_row() or node.is_column())
-            return arrange_row_or_column(node, result, content_position, content_size, measure);
+        {
+            if (auto res
+                = arrange_row_or_column(node, result, content_position, content_size, measure);
+                !res)
+                return res;
+        }
+        else if (auto res = arrange_box(node, result, content_position, content_size, measure);
+                 !res)
+            return res;
 
-        return arrange_box(node, result, content_position, content_size, measure);
+        return arrange_floating_children(node, result, content_position, content_size, measure);
     }
 
 
@@ -789,6 +846,8 @@ namespace
 
         if (!out.rects.try_emplace(node.id, rect { result.position, result.size }).second)
             return sleet::error { "Duplicate widget id \"{}\".", node.id.view() }.unexpected();
+
+        if (node.floating) out.floating.push_back({ node.id, node.z_index });
 
         for (std::size_t i = 0; i < node.children.size(); i++)
             if (auto res = collect_rects(node.children[i], result.children[i], out); !res)
@@ -829,6 +888,10 @@ auto sleet::widget::calculate_layout(const node_data     &root,
 
     if (auto res = collect_rects(root, measured_tree, out); !res)
         return std::move(res.error()).unexpected();
+
+    std::stable_sort(out.floating.begin(), out.floating.end(),
+                     [](const floating_entry &first, const floating_entry &second)
+                     { return first.z_index < second.z_index; });
 
     return out;
 }

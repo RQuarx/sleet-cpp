@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <concepts>
 #include <cstdint>
@@ -155,27 +156,6 @@ namespace sleet
         };
 
 
-        /// Keeps SDL text input enabled for as long as this guard lives.
-        struct text_input_guard
-        {
-            SDL_Window *window = nullptr;
-
-
-            explicit text_input_guard(SDL_Window *target) noexcept : window { target }
-            {
-                if (window != nullptr) SDL_StartTextInput(window);
-            }
-
-            ~text_input_guard()
-            {
-                if (window != nullptr) SDL_StopTextInput(window);
-            }
-
-            text_input_guard(const text_input_guard &)            = delete;
-            text_input_guard &operator=(const text_input_guard &) = delete;
-        };
-
-
         [[nodiscard]]
         inline auto action_target(const widget::node_data *node) noexcept
             -> const widget::node_data *
@@ -227,20 +207,87 @@ namespace sleet
         }
 
 
+        /// True when the node and every ancestor are visible and enabled.
         [[nodiscard]]
-        inline auto hit_test(const widget::node_data     &node,
+        inline auto effectively_visible(const widget::node_data &node) noexcept -> bool
+        {
+            for (const auto *current = &node; current != nullptr; current = current->parent)
+                if (!current->visible or current->disabled) return false;
+            return true;
+        }
+
+
+        /// Returns the node's border box intersected with every clipping
+        /// ancestor. The result is empty when the node is fully clipped away,
+        /// hidden, or disabled by an ancestor.
+        [[nodiscard]]
+        inline auto visible_bounds(const widget::node_data     &node,
+                                   const widget::layout_result &layout) noexcept
+            -> std::optional<math::rect>
+        {
+            if (!node.visible or node.disabled) return std::nullopt;
+
+            const auto *bounds = layout.find(node.id);
+            if (bounds == nullptr) return std::nullopt;
+
+            auto result = *bounds;
+
+            for (auto *current = node.parent; current != nullptr; current = current->parent)
+            {
+                if (!current->visible or current->disabled) return std::nullopt;
+                if (!current->clip_children) continue;
+
+                const auto *clip = layout.find(current->id);
+                if (clip == nullptr) return std::nullopt;
+
+                const auto left   = std::max(result.position.x, clip->position.x);
+                const auto top    = std::max(result.position.y, clip->position.y);
+                const auto right  = std::min(result.right(), clip->right());
+                const auto bottom = std::min(result.bottom(), clip->bottom());
+
+                if (right <= left or bottom <= top) return std::nullopt;
+                result = { left, top, right - left, bottom - top };
+            }
+
+            return result;
+        }
+
+
+        [[nodiscard]]
+        inline auto hit_test_subtree(const widget::node_data     &node,
+                                     const widget::layout_result &layout,
+                                     math::vec2 point) noexcept -> const widget::node_data *
+        {
+            const auto bounds = visible_bounds(node, layout);
+            if (!bounds or !bounds->contains(point)) return nullptr;
+
+            // Floating descendants are resolved by the global overlay pass so
+            // they can extend beyond this node's bounds.
+            for (auto it = node.children.rbegin(); it != node.children.rend(); ++it)
+            {
+                if (it->floating) continue;
+                if (auto *hit = hit_test_subtree(*it, layout, point); hit != nullptr) return hit;
+            }
+
+            return &node;
+        }
+
+
+        [[nodiscard]]
+        inline auto hit_test(const widget::node_data     &root,
                              const widget::layout_result &layout,
                              math::vec2 point) noexcept -> const widget::node_data *
         {
-            if (!node.visible) return nullptr;
+            // Overlays are painted last, so they are tested first, in reverse
+            // paint order.
+            for (auto it = layout.floating.rbegin(); it != layout.floating.rend(); ++it)
+            {
+                const auto *node = root.find(it->id);
+                if (node == nullptr) continue;
+                if (auto *hit = hit_test_subtree(*node, layout, point); hit != nullptr) return hit;
+            }
 
-            const auto *bounds = layout.find(node.id);
-            if (bounds == nullptr or !bounds->contains(point)) return nullptr;
-
-            for (auto it = node.children.rbegin(); it != node.children.rend(); ++it)
-                if (auto *hit = hit_test(*it, layout, point); hit != nullptr) return hit;
-
-            return &node;
+            return hit_test_subtree(root, layout, point);
         }
     }
 
@@ -283,11 +330,22 @@ namespace sleet
                 throw kei::error { "Failed to create the renderer: {}", SDL_GetError() };
 
             SDL_SetRenderVSync(m_renderer.get(), 1);
-            SDL_SetRenderLogicalPresentation(m_renderer.get(), m_width, m_height,
-                                             SDL_LOGICAL_PRESENTATION_LETTERBOX);
+
+            // Layout is expressed in window points. The renderer draws in
+            // physical pixels, so high-DPI windows use a pixel scale instead of
+            // SDL's logical presentation (which resamples the whole frame and
+            // makes text blurry).
+            m_text_cursor    = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_TEXT);
+            m_pointer_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER);
         }
 
-        ~application() = default;
+        ~application()
+        {
+            if (m_text_input_active) SDL_StopTextInput(m_window.get());
+            if (m_current_cursor != nullptr) SDL_SetCursor(SDL_GetDefaultCursor());
+            if (m_text_cursor != nullptr) SDL_DestroyCursor(m_text_cursor);
+            if (m_pointer_cursor != nullptr) SDL_DestroyCursor(m_pointer_cursor);
+        }
 
         application(const application &)            = delete;
         application &operator=(const application &) = delete;
@@ -353,7 +411,22 @@ namespace sleet
             return *this;
         }
 
-        void set_theme(widget::theme theme) { m_theme = std::move(theme); }
+        void set_theme(widget::theme theme)
+        {
+            // Apply immediately when the loop is running; otherwise the new
+            // theme is picked up when the render context is created. Keep the
+            // previous theme if the live context rejects the new fonts.
+            if (m_context != nullptr)
+            {
+                m_context->set_theme(theme);
+                m_theme            = std::move(theme);
+                m_redraw_requested = true;
+                return;
+            }
+
+            m_theme            = std::move(theme);
+            m_redraw_requested = true;
+        }
 
 
         auto run() -> int
@@ -379,6 +452,18 @@ namespace sleet
         std::unique_ptr<SDL_Window, _impl::window_deleter>     m_window;
         std::unique_ptr<SDL_Renderer, _impl::renderer_deleter> m_renderer;
 
+        SDL_Cursor *m_text_cursor    = nullptr;
+        SDL_Cursor *m_pointer_cursor = nullptr;
+        SDL_Cursor *m_current_cursor = nullptr;
+
+        render_context *m_context = nullptr;
+
+        /// Set by set_theme so the loop repaints even when no input arrives.
+        std::atomic<bool> m_redraw_requested { false };
+
+        /// Whether SDL text input is currently enabled for the window.
+        bool m_text_input_active = false;
+
         int           m_width  = 800;
         int           m_height = 600;
         widget::theme m_theme;
@@ -392,6 +477,12 @@ namespace sleet
 
         struct session
         {
+            struct edit_snapshot
+            {
+                std::string            text;
+                widget::text_selection selection;
+            };
+
             explicit session(State initial) : state { std::move(initial) } {}
 
             State                                state;
@@ -407,20 +498,91 @@ namespace sleet
             std::unordered_map<widget::widget_id, widget::text_selection> edits;
             std::unordered_set<widget::widget_id>                         open_combos;
 
+            /// Wheel offsets, clamped to the measured content after layout.
+            std::unordered_map<widget::widget_id, math::vec2> scrolls;
+
+            std::unordered_map<widget::widget_id, std::vector<edit_snapshot>> undo;
+            std::unordered_map<widget::widget_id, std::vector<edit_snapshot>> redo;
+
+            std::optional<widget::widget_id> preedit_id;
+            std::string                      preedit_text;
+            std::size_t                      preedit_caret = 0;
+
             bool press_active   = false;
+            bool focus_visible  = false;
             bool quit_requested = false;
             bool dirty          = true;
         };
 
 
+        /// Physical output pixels per logical window point.
         [[nodiscard]]
-        auto to_logical(float window_x, float window_y) const noexcept -> math::vec2
+        auto pixel_scale() const noexcept -> float
         {
-            float x = window_x;
-            float y = window_y;
-            if (!SDL_RenderCoordinatesFromWindow(m_renderer.get(), window_x, window_y, &x, &y))
-                return { window_x, window_y };
-            return { x, y };
+            int output_width  = 0;
+            int output_height = 0;
+            if (!SDL_GetRenderOutputSize(m_renderer.get(), &output_width, &output_height))
+                return 1.F;
+            if (output_width <= 0 or m_width <= 0) return 1.F;
+
+            const auto scale = static_cast<float>(output_width) / static_cast<float>(m_width);
+            return std::isfinite(scale) and scale > 0.F ? scale : 1.F;
+        }
+
+
+        /// SDL pointer events are already reported in window points, which is
+        /// the same unit the layout uses.
+        [[nodiscard]]
+        static auto to_logical(float window_x, float window_y) noexcept -> math::vec2
+        { return { window_x, window_y }; }
+
+
+        void sync_metrics(session &current, render_context &context)
+        {
+            SDL_GetWindowSize(m_window.get(), &m_width, &m_height);
+            context.set_pixel_scale(pixel_scale());
+            context.set_viewport({ static_cast<float>(m_width), static_cast<float>(m_height) });
+            current.dirty = true;
+        }
+
+
+        /// Enables IME and text-input events only while an editable field owns
+        /// focus. Keeping text input enabled globally would show an on-screen
+        /// keyboard and IME candidates even when no field is active.
+        void sync_text_input(session &current)
+        {
+            const auto *focused
+                = current.tree and current.focused ? current.tree->find(*current.focused) : nullptr;
+
+            const auto should_enable = focused != nullptr
+                                   and focused->control == widget::control_kind::text_input
+                                   and _impl::effectively_visible(*focused);
+
+            if (should_enable == m_text_input_active) return;
+
+            if (should_enable)
+                m_text_input_active = SDL_StartTextInput(m_window.get());
+            else
+            {
+                SDL_StopTextInput(m_window.get());
+                m_text_input_active = false;
+            }
+        }
+
+
+        void update_cursor(const widget::node_data *hit)
+        {
+            auto *next = static_cast<SDL_Cursor *>(nullptr);
+
+            if (const auto *control = _impl::control_target(hit);
+                control != nullptr and control->control == widget::control_kind::text_input)
+                next = m_text_cursor;
+            else if (_impl::interactive_target(hit) != nullptr)
+                next = m_pointer_cursor;
+
+            if (next == m_current_cursor) return;
+            m_current_cursor = next;
+            SDL_SetCursor(next == nullptr ? SDL_GetDefaultCursor() : next);
         }
 
 
@@ -496,10 +658,14 @@ namespace sleet
 
         static void clear_pointer_state(session &current)
         {
-            if (!current.hovered and !current.pressed and !current.press_active) return;
+            if (!current.hovered and !current.pressed and !current.press_active
+                and !current.selecting and !current.dragging)
+                return;
 
             current.hovered.reset();
             current.pressed.reset();
+            current.selecting.reset();
+            current.dragging.reset();
             current.press_active = false;
             current.dirty        = true;
         }
@@ -540,20 +706,29 @@ namespace sleet
         static void collect_focusable(const widget::node_data                &node,
                                       std::vector<const widget::node_data *> &result)
         {
-            if (!node.visible) return;
+            if (!node.visible or node.disabled) return;
             if (node.focusable) result.push_back(&node);
             for (const auto &child : node.children) collect_focusable(child, result);
         }
 
 
-        void focus_node(session &current, const widget::node_data &node)
+        void focus_node(session &current, const widget::node_data &node, bool keyboard = false)
         {
-            if (current.focused and *current.focused == node.id) return;
+            const bool same = current.focused and *current.focused == node.id;
 
-            current.focused = node.id;
-            if (node.control == widget::control_kind::text_input)
-                current.edits[node.id].collapse(node.text.size());
-            current.dirty = true;
+            if (!same)
+            {
+                current.focused = node.id;
+                current.selecting.reset();
+                if (node.control == widget::control_kind::text_input)
+                    current.edits[node.id].collapse(node.text.size());
+                current.preedit_id.reset();
+                current.preedit_text.clear();
+                current.preedit_caret = 0;
+                current.dirty         = true;
+            }
+
+            current.focus_visible = keyboard;
         }
 
 
@@ -584,20 +759,24 @@ namespace sleet
             else
                 index = (static_cast<std::size_t>(it - nodes.begin()) + 1) % nodes.size();
 
-            focus_node(current, *nodes[index]);
+            focus_node(current, *nodes[index], true);
         }
 
 
         static void apply_combo_visibility(widget::node_data                           &node,
                                            const std::unordered_set<widget::widget_id> &open)
         {
-            if (node.control == widget::control_kind::combo_box and node.parent != nullptr)
-            {
-                const bool is_open = open.contains(node.id);
-                for (auto &sibling : node.parent->children)
-                    if (sibling.control == widget::control_kind::combo_option)
-                        sibling.visible = is_open;
-            }
+            // A combo column owns its header and its option rows. Hide stale
+            // option rows even when the header disappeared or changed type
+            // between frames.
+            auto has_open_header = false;
+            for (const auto &child : node.children)
+                if (child.control == widget::control_kind::combo_box and open.contains(child.id))
+                    has_open_header = true;
+
+            for (auto &child : node.children)
+                if (child.control == widget::control_kind::combo_option)
+                    child.visible = has_open_header;
 
             for (auto &child : node.children) apply_combo_visibility(child, open);
         }
@@ -605,16 +784,17 @@ namespace sleet
 
         void sync_controls(session &current, widget::node_data &root)
         {
-            apply_combo_visibility(root, current.open_combos);
-
             for (auto it = current.open_combos.begin(); it != current.open_combos.end();)
             {
                 const auto *node = root.find(*it);
-                if (node == nullptr or node->control != widget::control_kind::combo_box)
+                if (node == nullptr or node->control != widget::control_kind::combo_box
+                    or !_impl::effectively_visible(*node))
                     it = current.open_combos.erase(it);
                 else
                     ++it;
             }
+
+            apply_combo_visibility(root, current.open_combos);
 
             for (auto it = current.edits.begin(); it != current.edits.end();)
             {
@@ -631,10 +811,37 @@ namespace sleet
                 ++it;
             }
 
+            const auto is_text_input = [&root](const widget::widget_id &id)
+            {
+                const auto *node = root.find(id);
+                return node != nullptr and node->control == widget::control_kind::text_input;
+            };
+
+            for (auto it = current.undo.begin(); it != current.undo.end();)
+                if (!is_text_input(it->first))
+                    it = current.undo.erase(it);
+                else
+                    ++it;
+
+            for (auto it = current.redo.begin(); it != current.redo.end();)
+                if (!is_text_input(it->first))
+                    it = current.redo.erase(it);
+                else
+                    ++it;
+
+            for (auto it = current.scrolls.begin(); it != current.scrolls.end();)
+            {
+                const auto *node = root.find(it->first);
+                if (node == nullptr or !node->scrollable)
+                    it = current.scrolls.erase(it);
+                else
+                    ++it;
+            }
+
             if (current.focused)
             {
                 const auto *node = root.find(*current.focused);
-                if (node == nullptr or !node->focusable or !node->visible)
+                if (node == nullptr or !node->focusable or !_impl::effectively_visible(*node))
                     current.focused.reset();
                 else if (node->control == widget::control_kind::text_input
                          and !current.edits.contains(node->id))
@@ -644,31 +851,75 @@ namespace sleet
             if (current.selecting)
             {
                 const auto *node = root.find(*current.selecting);
-                if (node == nullptr or node->control != widget::control_kind::text_input)
+                if (node == nullptr or node->control != widget::control_kind::text_input
+                    or !_impl::effectively_visible(*node))
                     current.selecting.reset();
+            }
+
+            if (current.hovered)
+            {
+                const auto *node = root.find(*current.hovered);
+                if (node == nullptr or !_impl::effectively_visible(*node)) current.hovered.reset();
+            }
+
+            if (current.pressed)
+            {
+                const auto *node = root.find(*current.pressed);
+                if (node == nullptr or !_impl::effectively_visible(*node))
+                {
+                    current.pressed.reset();
+                    current.press_active = false;
+                }
             }
 
             if (current.dragging)
             {
                 const auto *node = root.find(*current.dragging);
-                if (node == nullptr or node->control != widget::control_kind::slider)
+                if (node == nullptr or node->control != widget::control_kind::slider
+                    or !_impl::effectively_visible(*node))
                     current.dragging.reset();
+            }
+
+            if (current.preedit_id)
+            {
+                const auto *node = root.find(*current.preedit_id);
+                if (node == nullptr or node->control != widget::control_kind::text_input
+                    or !_impl::effectively_visible(*node) or !current.focused
+                    or *current.focused != *current.preedit_id)
+                {
+                    current.preedit_id.reset();
+                    current.preedit_text.clear();
+                    current.preedit_caret = 0;
+                }
             }
         }
 
 
         static void set_combo_open(session &current, const widget::node_data &header, bool open)
         {
-            if (open)
-                current.open_combos.insert(header.id);
-            else
-                current.open_combos.erase(header.id);
+            // Only one popup may be open at a time. Opening a new combo closes
+            // the previous one before its options are hidden.
+            current.open_combos.clear();
+            if (open) current.open_combos.insert(header.id);
 
-            if (header.parent != nullptr)
+            if (current.tree.has_value())
+                apply_combo_visibility(*current.tree, current.open_combos);
+            else if (header.parent != nullptr)
                 for (auto &sibling : header.parent->children)
                     if (sibling.control == widget::control_kind::combo_option)
                         sibling.visible = open;
 
+            current.dirty = true;
+        }
+
+
+        static void close_all_combos(session &current)
+        {
+            if (current.open_combos.empty()) return;
+
+            current.open_combos.clear();
+            if (current.tree.has_value())
+                apply_combo_visibility(*current.tree, current.open_combos);
             current.dirty = true;
         }
 
@@ -683,26 +934,28 @@ namespace sleet
         }
 
 
-        void choose_combo_option(session &current, const widget::node_data &option)
+        void choose_combo_option(session                 &current,
+                                 const widget::node_data &option,
+                                 bool                     keyboard = false)
         {
             emit_control(current, event::kind::selection_changed, option, option.text);
 
             if (const auto *header = combo_header(option); header != nullptr)
             {
                 set_combo_open(current, *header, false);
-                focus_node(current, *header);
+                focus_node(current, *header, keyboard);
             }
             else
                 current.dirty = true;
         }
 
 
-        void close_combo(session &current, const widget::node_data &option)
+        void close_combo(session &current, const widget::node_data &option, bool keyboard = false)
         {
             if (const auto *header = combo_header(option); header != nullptr)
             {
                 set_combo_open(current, *header, false);
-                focus_node(current, *header);
+                focus_node(current, *header, keyboard);
             }
             else
                 current.dirty = true;
@@ -734,25 +987,47 @@ namespace sleet
             const auto target  = x - content.position.x;
             if (target <= 0.F) return 0;
 
-            std::size_t best     = 0;
-            auto        distance = std::abs(target);
-            auto        offset   = std::size_t { 0 };
+            // Build the grapheme boundaries once, then binary-search the prefix
+            // widths. This turns click-to-caret from O(n) text measurements
+            // into O(log n).
+            auto offsets = std::vector<std::size_t> { 0 };
+            while (offsets.back() < node.text.size())
+                offsets.push_back(widget::next_offset(node.text, offsets.back()));
 
-            while (offset < node.text.size())
+            const auto width_at = [&](std::size_t index) -> std::optional<float>
             {
-                offset = widget::next_offset(node.text, offset);
+                auto width
+                    = context.measure_text(std::string_view { node.text }.substr(0, offsets[index]),
+                                           node.font, std::nullopt);
+                if (!width) return std::nullopt;
+                return width->x;
+            };
 
-                auto width = context.measure_text(std::string_view { node.text }.substr(0, offset),
-                                                  node.font, std::nullopt);
+            auto lo = std::size_t { 0 };
+            auto hi = offsets.size() - 1;
+
+            while (lo < hi)
+            {
+                const auto mid   = (lo + hi + 1) / 2;
+                const auto width = width_at(mid);
                 if (!width) break;
 
-                const auto candidate = std::abs(width->x - target);
-                if (candidate < distance)
-                {
-                    best     = offset;
-                    distance = candidate;
-                }
+                if (*width <= target)
+                    lo = mid;
+                else
+                    hi = mid - 1;
             }
+
+            const auto lower = width_at(lo);
+            if (!lower) return offsets[lo];
+
+            auto best     = offsets[lo];
+            auto distance = std::abs(*lower - target);
+
+            if (lo + 1 < offsets.size())
+                if (const auto upper = width_at(lo + 1))
+                    if (const auto candidate = std::abs(*upper - target); candidate < distance)
+                        best = offsets[lo + 1];
 
             return best;
         }
@@ -786,19 +1061,24 @@ namespace sleet
         }
 
 
-        void paste_clipboard(session                &current,
+        /// Inserts the clipboard into \p node when it contains non-empty
+        /// single-line text. Returns whether the text changed, so a no-op
+        /// paste does not create a spurious undo step.
+        auto paste_clipboard(session                &current,
                              widget::node_data      &node,
-                             widget::text_selection &edit) const
+                             widget::text_selection &edit) const -> bool
         {
             auto *clipboard = SDL_GetClipboardText();
-            if (clipboard == nullptr) return;
+            if (clipboard == nullptr) return false;
 
             const auto text = widget::sanitize_single_line(clipboard);
             SDL_free(clipboard);
-            if (text.empty()) return;
+            if (text.empty()) return false;
 
+            record_undo(current, node, edit);
             widget::insert_text(node.text, edit, text);
             apply_text_edit(current, node);
+            return true;
         }
 
 
@@ -806,6 +1086,49 @@ namespace sleet
         {
             emit_control(current, event::kind::text_edit, node, node.text);
             current.dirty = true;
+        }
+
+
+        static void record_undo(session                      &current,
+                                const widget::node_data      &node,
+                                const widget::text_selection &edit)
+        {
+            auto &stack = current.undo[node.id];
+
+            if (!stack.empty() and stack.back().text == node.text
+                and stack.back().selection.caret == edit.caret
+                and stack.back().selection.anchor == edit.anchor)
+                return;
+
+            stack.push_back({ node.text, edit });
+            if (stack.size() > 128) stack.erase(stack.begin());
+
+            current.redo[node.id].clear();
+        }
+
+
+        void restore_snapshot(session                &current,
+                              widget::node_data      &node,
+                              widget::text_selection &edit,
+                              bool                    undo) const
+        {
+            auto &from = undo ? current.undo : current.redo;
+            auto &to   = undo ? current.redo : current.undo;
+
+            const auto it = from.find(node.id);
+            if (it == from.end() or it->second.empty()) return;
+
+            to[node.id].push_back({ node.text, edit });
+
+            auto snapshot = std::move(it->second.back());
+            it->second.pop_back();
+
+            node.text   = std::move(snapshot.text);
+            edit        = snapshot.selection;
+            edit.caret  = widget::clamp_offset(node.text, edit.caret);
+            edit.anchor = widget::clamp_offset(node.text, edit.anchor);
+
+            apply_text_edit(current, node);
         }
 
 
@@ -817,27 +1140,43 @@ namespace sleet
             edit.caret  = widget::clamp_offset(node.text, edit.caret);
             edit.anchor = widget::clamp_offset(node.text, edit.anchor);
 
-            const bool shift = (native.key.mod & SDL_KMOD_SHIFT) != 0;
-            const bool ctrl  = (native.key.mod & SDL_KMOD_CTRL) != 0;
+            const bool shift   = (native.key.mod & SDL_KMOD_SHIFT) != 0;
+            const bool alt     = (native.key.mod & SDL_KMOD_ALT) != 0;
+            const bool ctrl    = (native.key.mod & SDL_KMOD_CTRL) != 0;
+            const bool gui     = (native.key.mod & SDL_KMOD_GUI) != 0;
+            const bool command = ctrl or gui;
+            const bool by_word = command or alt;
 
             switch (native.key.key)
             {
             case SDLK_BACKSPACE:
-                if (widget::erase_backward(node.text, edit)) apply_text_edit(current, node);
+                if (!edit.has_selection() and edit.caret == 0) return true;
+                record_undo(current, node, edit);
+                if (by_word ? widget::erase_word_backward(node.text, edit)
+                            : widget::erase_backward(node.text, edit))
+                    apply_text_edit(current, node);
                 return true;
 
             case SDLK_DELETE:
-                if (widget::erase_forward(node.text, edit)) apply_text_edit(current, node);
+                if (!edit.has_selection() and edit.caret >= node.text.size()) return true;
+                record_undo(current, node, edit);
+                if (by_word ? widget::erase_word_forward(node.text, edit)
+                            : widget::erase_forward(node.text, edit))
+                    apply_text_edit(current, node);
                 return true;
 
             case SDLK_LEFT:
-                widget::move_caret(node.text, edit, widget::previous_offset(node.text, edit.caret),
+                widget::move_caret(node.text, edit,
+                                   by_word ? widget::previous_word_offset(node.text, edit.caret)
+                                           : widget::previous_offset(node.text, edit.caret),
                                    shift);
                 current.dirty = true;
                 return true;
 
             case SDLK_RIGHT:
-                widget::move_caret(node.text, edit, widget::next_offset(node.text, edit.caret),
+                widget::move_caret(node.text, edit,
+                                   by_word ? widget::next_word_offset(node.text, edit.caret)
+                                           : widget::next_offset(node.text, edit.caret),
                                    shift);
                 current.dirty = true;
                 return true;
@@ -853,20 +1192,21 @@ namespace sleet
                 return true;
 
             case SDLK_A:
-                if (!ctrl) return false;
+                if (!command) return false;
                 widget::select_all(node.text, edit);
                 current.dirty = true;
                 return true;
 
             case SDLK_C:
-                if (!ctrl) return false;
+                if (!command) return false;
                 copy_selection(node, edit);
                 return true;
 
             case SDLK_X:
-                if (!ctrl) return false;
+                if (!command) return false;
                 if (edit.has_selection())
                 {
+                    record_undo(current, node, edit);
                     copy_selection(node, edit);
                     widget::insert_text(node.text, edit, {});
                     apply_text_edit(current, node);
@@ -874,8 +1214,18 @@ namespace sleet
                 return true;
 
             case SDLK_V:
-                if (!ctrl) return false;
-                paste_clipboard(current, node, edit);
+                if (!command) return false;
+                (void)paste_clipboard(current, node, edit);
+                return true;
+
+            case SDLK_Z:
+                if (!command) return false;
+                restore_snapshot(current, node, edit, !shift);
+                return true;
+
+            case SDLK_Y:
+                if (!command) return false;
+                restore_snapshot(current, node, edit, false);
                 return true;
 
             case SDLK_RETURN:
@@ -884,6 +1234,17 @@ namespace sleet
                 return true;
 
             case SDLK_ESCAPE:
+                // Escape cancels an active IME composition before it clears
+                // focus; otherwise the field would lose focus mid-composition.
+                if (current.preedit_id)
+                {
+                    current.preedit_id.reset();
+                    current.preedit_text.clear();
+                    current.preedit_caret = 0;
+                    current.dirty         = true;
+                    return true;
+                }
+
                 current.focused.reset();
                 current.dirty = true;
                 return true;
@@ -918,17 +1279,57 @@ namespace sleet
         }
 
 
-        void focus_combo_option(session &current, const widget::node_data &header, bool forward)
+        [[nodiscard]]
+        static auto combo_options(const widget::node_data &header)
+            -> std::vector<const widget::node_data *>
         {
-            if (header.parent == nullptr) return;
+            auto options = std::vector<const widget::node_data *> {};
+            if (header.parent == nullptr) return options;
 
-            std::vector<const widget::node_data *> options;
             for (const auto &sibling : header.parent->children)
-                if (sibling.control == widget::control_kind::combo_option and sibling.visible)
+                if (sibling.control == widget::control_kind::combo_option and sibling.visible
+                    and !sibling.disabled)
                     options.push_back(&sibling);
 
+            return options;
+        }
+
+
+        /// Moves focus by \p delta through the visible options of a combo box.
+        /// When the header currently owns focus, a positive delta starts at
+        /// the first option and a negative delta at the last.
+        void focus_combo_option(session &current, const widget::node_data &header, int delta)
+        {
+            const auto options = combo_options(header);
             if (options.empty()) return;
-            focus_node(current, *options[forward ? 0 : options.size() - 1]);
+
+            auto index = std::size_t { 0 };
+            if (const auto it
+                = std::find_if(options.begin(), options.end(), [&current](const auto *option)
+                               { return current.focused and option->id == *current.focused; });
+                it != options.end())
+            {
+                const auto current_index = static_cast<std::ptrdiff_t>(it - options.begin());
+                index                    = static_cast<std::size_t>(
+                    std::clamp(current_index + delta, std::ptrdiff_t { 0 },
+                               static_cast<std::ptrdiff_t>(options.size()) - 1));
+            }
+            else
+                index = delta < 0 ? options.size() - 1 : 0;
+
+            focus_node(current, *options[index], true);
+        }
+
+
+        /// Focuses the first or last visible option, ignoring the current
+        /// focus. Home and End use this instead of a large relative delta,
+        /// which would be ambiguous when the header owns focus.
+        void focus_combo_edge(session &current, const widget::node_data &header, bool last)
+        {
+            const auto options = combo_options(header);
+            if (options.empty()) return;
+
+            focus_node(current, last ? *options.back() : *options.front(), true);
         }
 
 
@@ -941,7 +1342,10 @@ namespace sleet
             {
             case SDLK_RETURN:
             case SDLK_KP_ENTER:
-            case SDLK_SPACE:    set_combo_open(current, node, !is_open); return true;
+            case SDLK_SPACE:
+                if (native.key.repeat) return true;
+                set_combo_open(current, node, !is_open);
+                return true;
 
             case SDLK_ESCAPE:
                 if (!is_open) return false;
@@ -949,13 +1353,33 @@ namespace sleet
                 return true;
 
             case SDLK_DOWN:
-                if (!is_open) return false;
-                focus_combo_option(current, node, true);
+                if (!is_open)
+                {
+                    set_combo_open(current, node, true);
+                    focus_combo_option(current, node, 1);
+                }
+                else
+                    focus_combo_option(current, node, 1);
                 return true;
 
             case SDLK_UP:
+                if (!is_open)
+                {
+                    set_combo_open(current, node, true);
+                    focus_combo_option(current, node, -1);
+                }
+                else
+                    focus_combo_option(current, node, -1);
+                return true;
+
+            case SDLK_HOME:
                 if (!is_open) return false;
-                focus_combo_option(current, node, false);
+                focus_combo_edge(current, node, false);
+                return true;
+
+            case SDLK_END:
+                if (!is_open) return false;
+                focus_combo_edge(current, node, true);
                 return true;
 
             default: return false;
@@ -971,9 +1395,24 @@ namespace sleet
             {
             case SDLK_RETURN:
             case SDLK_KP_ENTER:
-            case SDLK_SPACE:    choose_combo_option(current, node); return true;
+            case SDLK_SPACE:
+                if (native.key.repeat) return true;
+                choose_combo_option(current, node, true);
+                return true;
 
-            case SDLK_ESCAPE: close_combo(current, node); return true;
+            case SDLK_ESCAPE: close_combo(current, node, true); return true;
+
+            case SDLK_DOWN:
+            case SDLK_UP:
+                if (const auto *header = combo_header(node); header != nullptr)
+                    focus_combo_option(current, *header, native.key.key == SDLK_DOWN ? 1 : -1);
+                return true;
+
+            case SDLK_HOME:
+            case SDLK_END:
+                if (const auto *header = combo_header(node); header != nullptr)
+                    focus_combo_edge(current, *header, native.key.key == SDLK_END);
+                return true;
 
             default: return false;
             }
@@ -983,7 +1422,7 @@ namespace sleet
         auto handle_control_key(session &current, const SDL_Event &native) -> bool
         {
             auto *node = focused_node(current);
-            if (node == nullptr) return false;
+            if (node == nullptr or !_impl::effectively_visible(*node)) return false;
 
             switch (node->control)
             {
@@ -1004,8 +1443,11 @@ namespace sleet
             {
             case SDLK_RETURN:
             case SDLK_KP_ENTER:
-            case SDLK_SPACE:    emit_control(current, event::kind::activate, *node); return true;
-            default:            return false;
+            case SDLK_SPACE:
+                if (native.key.repeat) return true;
+                emit_control(current, event::kind::activate, *node);
+                return true;
+            default: return false;
             }
         }
 
@@ -1013,6 +1455,20 @@ namespace sleet
         auto handle_focus_key(session &current, const SDL_Event &native) -> bool
         {
             if (native.key.key != SDLK_TAB) return false;
+            if (native.key.repeat) return true;
+
+            // Tab dismisses an open popup. Focus returns to its header before
+            // traversal continues so the next Tab moves to the following
+            // widget instead of an option that just disappeared.
+            if (!current.open_combos.empty())
+            {
+                if (auto *focused = focused_node(current);
+                    focused != nullptr and focused->control == widget::control_kind::combo_option)
+                    if (const auto *header = combo_header(*focused); header != nullptr)
+                        focus_node(current, *header, true);
+
+                close_all_combos(current);
+            }
 
             focus_next(current, (native.key.mod & SDL_KMOD_SHIFT) != 0);
             return true;
@@ -1054,7 +1510,8 @@ namespace sleet
         void handle_control_press(session                 &current,
                                   render_context          &context,
                                   const widget::node_data *hit,
-                                  float                    x)
+                                  float                    x,
+                                  int                      clicks = 1)
         {
             const auto *target = _impl::control_target(hit);
             if (target == nullptr) return;
@@ -1072,14 +1529,24 @@ namespace sleet
                     edit.caret  = widget::clamp_offset(node->text, edit.caret);
                     edit.anchor = widget::clamp_offset(node->text, edit.anchor);
 
+                    auto caret = node->text.size();
                     if (const auto *bounds
                         = current.layout ? current.layout->find(node->id) : nullptr)
                     {
                         const auto scroll = text_scroll(context, *node, *bounds, edit.caret);
-                        edit.collapse(caret_at(context, *node, *bounds, x + scroll));
+                        caret             = caret_at(context, *node, *bounds, x + scroll);
+                    }
+
+                    if (clicks >= 3)
+                        widget::select_all(node->text, edit);
+                    else if (clicks == 2)
+                    {
+                        const auto [first, last] = widget::word_range_at(node->text, caret);
+                        edit.anchor              = first;
+                        edit.caret               = last;
                     }
                     else
-                        edit.collapse(node->text.size());
+                        edit.collapse(caret);
 
                     current.selecting = node->id;
                     current.dirty     = true;
@@ -1141,6 +1608,8 @@ namespace sleet
 
             handle_control_motion(current, context, point);
 
+            update_cursor(hit);
+
             auto next_hover = visual_target(hit);
             if (current.hovered != next_hover)
             {
@@ -1162,11 +1631,14 @@ namespace sleet
             const auto *hit     = hit_at(current, native.button.x, native.button.y);
             const auto  point   = to_logical(native.button.x, native.button.y);
 
+            update_cursor(hit);
+
             if (native.button.button == SDL_BUTTON_LEFT and is_down)
             {
                 close_combos_outside(current, hit);
                 update_focus_from_hit(current, hit);
-                handle_control_press(current, context, hit, point.x);
+                handle_control_press(current, context, hit, point.x,
+                                     static_cast<int>(native.button.clicks));
             }
 
             auto value = make_event(is_down ? event::kind::mouse_down : event::kind::mouse_up, hit);
@@ -1192,6 +1664,94 @@ namespace sleet
         }
 
 
+        [[nodiscard]]
+        static auto scroll_target(const widget::node_data *hit) noexcept
+            -> const widget::node_data *
+        {
+            for (auto *current = hit; current != nullptr; current = current->parent)
+                if (current->scrollable) return current;
+            return nullptr;
+        }
+
+
+        static void accumulate_content(const widget::node_data     &node,
+                                       const widget::layout_result &layout,
+                                       std::optional<math::rect>   &content)
+        {
+            for (const auto &child : node.children)
+            {
+                if (!child.visible or child.floating) continue;
+
+                if (const auto *bounds = layout.find(child.id))
+                {
+                    if (!content)
+                        content = *bounds;
+                    else
+                    {
+                        const auto left   = std::min(content->position.x, bounds->position.x);
+                        const auto top    = std::min(content->position.y, bounds->position.y);
+                        const auto right  = std::max(content->right(), bounds->right());
+                        const auto bottom = std::max(content->bottom(), bounds->bottom());
+                        content           = math::rect { left, top, right - left, bottom - top };
+                    }
+                }
+
+                accumulate_content(child, layout, content);
+            }
+        }
+
+
+        static void translate_subtree(const widget::node_data &node,
+                                      widget::layout_result   &layout,
+                                      math::vec2               delta)
+        {
+            for (const auto &child : node.children)
+            {
+                if (const auto it = layout.rects.find(child.id); it != layout.rects.end())
+                    it->second.position += delta;
+
+                translate_subtree(child, layout, delta);
+            }
+        }
+
+
+        /// Applies the stored wheel offsets to a freshly calculated layout.
+        /// Nested scroll containers are resolved bottom-up so an outer viewport
+        /// also moves the already-panned inner content.
+        static void apply_scroll_offsets(session                 &current,
+                                         const widget::node_data &node,
+                                         widget::layout_result   &layout)
+        {
+            for (const auto &child : node.children) apply_scroll_offsets(current, child, layout);
+
+            if (!node.scrollable) return;
+
+            const auto *bounds = layout.find(node.id);
+            if (bounds == nullptr) return;
+
+            auto content = std::optional<math::rect> {};
+            accumulate_content(node, layout, content);
+
+            auto &offset = current.scrolls[node.id];
+            if (!content)
+            {
+                offset = {};
+                return;
+            }
+
+            const auto content_right  = bounds->right() - node.padding.right;
+            const auto content_bottom = bounds->bottom() - node.padding.bottom;
+            const auto max_x          = std::max(0.F, content->right() - content_right);
+            const auto max_y          = std::max(0.F, content->bottom() - content_bottom);
+
+            offset.x = std::clamp(offset.x, 0.F, max_x);
+            offset.y = std::clamp(offset.y, 0.F, max_y);
+
+            if (offset.x != 0.F or offset.y != 0.F)
+                translate_subtree(node, layout, { -offset.x, -offset.y });
+        }
+
+
         void handle_wheel(session &current, const SDL_Event &native)
         {
             const auto *hit   = hit_at(current, native.wheel.mouse_x, native.wheel.mouse_y);
@@ -1201,6 +1761,15 @@ namespace sleet
             value.y           = point.y;
             value.scroll_x    = native.wheel.x;
             value.scroll_y    = native.wheel.y;
+
+            if (const auto *scroller = scroll_target(hit); scroller != nullptr)
+            {
+                auto &offset  = current.scrolls[scroller->id];
+                offset.x     -= native.wheel.x * 48.F;
+                offset.y     -= native.wheel.y * 48.F;
+                current.dirty = true;
+            }
+
             dispatch(value, current);
         }
 
@@ -1225,10 +1794,17 @@ namespace sleet
 
         void handle_text_input(session &current, const SDL_Event &native)
         {
+            // Committing a composition replaces the preedit; it is never
+            // inserted together with the committed text.
+            current.preedit_id.reset();
+            current.preedit_text.clear();
+            current.preedit_caret = 0;
+
             if (native.text.text != nullptr)
             {
                 auto *node = focused_node(current);
-                if (node != nullptr and node->control == widget::control_kind::text_input)
+                if (node != nullptr and node->control == widget::control_kind::text_input
+                    and _impl::effectively_visible(*node))
                 {
                     const auto text = widget::sanitize_single_line(native.text.text);
                     if (!text.empty())
@@ -1236,9 +1812,11 @@ namespace sleet
                         auto &edit  = current.edits[node->id];
                         edit.caret  = widget::clamp_offset(node->text, edit.caret);
                         edit.anchor = widget::clamp_offset(node->text, edit.anchor);
+                        record_undo(current, *node, edit);
                         widget::insert_text(node->text, edit, text);
                         apply_text_edit(current, *node);
                     }
+                    current.dirty = true;
                     return;
                 }
             }
@@ -1249,18 +1827,54 @@ namespace sleet
         }
 
 
+        void handle_text_editing(session &current, const SDL_Event &native)
+        {
+            auto *node = focused_node(current);
+            if (node == nullptr or node->control != widget::control_kind::text_input
+                or !_impl::effectively_visible(*node) or native.edit.text == nullptr)
+            {
+                current.preedit_id.reset();
+                current.preedit_text.clear();
+                current.preedit_caret = 0;
+                current.dirty         = true;
+                return;
+            }
+
+            auto text = widget::sanitize_single_line(native.edit.text);
+            if (text.empty())
+            {
+                current.preedit_id.reset();
+                current.preedit_text.clear();
+                current.preedit_caret = 0;
+            }
+            else
+            {
+                current.preedit_id   = node->id;
+                current.preedit_text = std::move(text);
+
+                // SDL reports the selection inside the composition, or -1
+                // when the platform does not provide one. With no selection,
+                // keep the caret at the end of the composition.
+                auto selection_end = current.preedit_text.size();
+                if (native.edit.start >= 0)
+                    selection_end = static_cast<std::size_t>(native.edit.start)
+                                  + static_cast<std::size_t>(std::max(0, native.edit.length));
+
+                current.preedit_caret = widget::clamp_offset(current.preedit_text, selection_end);
+            }
+
+            current.dirty = true;
+        }
+
+
         void handle_resize(session &current, render_context &context)
         {
-            SDL_GetWindowSize(m_window.get(), &m_width, &m_height);
-            SDL_SetRenderLogicalPresentation(m_renderer.get(), m_width, m_height,
-                                             SDL_LOGICAL_PRESENTATION_LETTERBOX);
-            context.set_viewport({ static_cast<float>(m_width), static_cast<float>(m_height) });
+            sync_metrics(current, context);
 
             auto value   = make_event(event::kind::resize, nullptr);
             value.width  = m_width;
             value.height = m_height;
             dispatch(value, current);
-            current.dirty = true;
         }
 
 
@@ -1275,12 +1889,39 @@ namespace sleet
                 break;
 
             case SDL_EVENT_WINDOW_MOUSE_LEAVE:
-            case SDL_EVENT_WINDOW_FOCUS_LOST:  clear_pointer_state(current); break;
+                clear_pointer_state(current);
+                update_cursor(nullptr);
+                break;
+
+            case SDL_EVENT_WINDOW_FOCUS_LOST:
+                clear_pointer_state(current);
+                close_all_combos(current);
+
+                // The platform cancels any composition when focus leaves, so
+                // do not keep showing a preedit that can no longer be
+                // committed.
+                current.preedit_id.reset();
+                current.preedit_text.clear();
+                current.preedit_caret = 0;
+                current.dirty         = true;
+
+                if (m_text_input_active)
+                {
+                    SDL_StopTextInput(m_window.get());
+                    m_text_input_active = false;
+                }
+                break;
+
+            case SDL_EVENT_WINDOW_FOCUS_GAINED: current.dirty = true; break;
 
             case SDL_EVENT_WINDOW_EXPOSED:
             case SDL_EVENT_WINDOW_RESTORED: current.dirty = true; break;
 
             case SDL_EVENT_WINDOW_RESIZED: handle_resize(current, context); break;
+
+            case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+            case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+            case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED: sync_metrics(current, context); break;
 
             case SDL_EVENT_MOUSE_MOTION: handle_pointer_move(current, context, native); break;
 
@@ -1293,6 +1934,8 @@ namespace sleet
             case SDL_EVENT_KEY_UP:   handle_key(current, native); break;
 
             case SDL_EVENT_TEXT_INPUT: handle_text_input(current, native); break;
+
+            case SDL_EVENT_TEXT_EDITING: handle_text_editing(current, native); break;
 
             default: break;
             }
@@ -1362,15 +2005,40 @@ namespace sleet
             current.tree   = std::move(*next_tree);
             current.layout = std::move(*next_layout);
 
+            apply_scroll_offsets(current, *current.tree, *current.layout);
+            sync_text_input(current);
+
             context.set_hovered(current.hovered);
             context.set_pressed(current.pressed);
-            context.set_focused(current.focused);
 
-            if (auto *node = current.focused ? current.tree->find(*current.focused) : nullptr;
-                node != nullptr and node->control == widget::control_kind::text_input)
-                context.set_text_selection(node->id, current.edits[node->id]);
+            const auto *focused_node_ptr
+                = current.focused ? current.tree->find(*current.focused) : nullptr;
+
+            // Keyboard focus rings are focus-visible; pointer focus on a text
+            // input still shows its caret and border.
+            const bool show_focus
+                = focused_node_ptr != nullptr
+              and (current.focus_visible
+                   or focused_node_ptr->control == widget::control_kind::text_input);
+            context.set_focused(show_focus ? current.focused : std::nullopt);
+
+            if (focused_node_ptr != nullptr
+                and focused_node_ptr->control == widget::control_kind::text_input)
+            {
+                context.set_text_selection(focused_node_ptr->id,
+                                           current.edits[focused_node_ptr->id]);
+
+                if (current.preedit_id and *current.preedit_id == focused_node_ptr->id)
+                    context.set_preedit(current.preedit_id, current.preedit_text,
+                                        current.preedit_caret);
+                else
+                    context.set_preedit(std::nullopt, {}, 0);
+            }
             else
+            {
                 context.set_text_selection(std::nullopt, {});
+                context.set_preedit(std::nullopt, {}, 0);
+            }
 
             if (auto result = context.render(*current.tree, *current.layout); !result)
             {
@@ -1392,9 +2060,19 @@ namespace sleet
         auto run_impl() -> int
         {
             auto context = render_context { m_renderer.get(), m_theme };
+            context.set_pixel_scale(pixel_scale());
             context.set_viewport({ static_cast<float>(m_width), static_cast<float>(m_height) });
 
-            const auto text_input = _impl::text_input_guard { m_window.get() };
+            // Expose the live context to set_theme, and clear the pointer on
+            // every exit path so it never dangles.
+            struct context_binding
+            {
+                render_context *&slot;
+
+                ~context_binding() { slot = nullptr; }
+            } binding { m_context };
+
+            m_context = &context;
 
             auto booted = m_boot();
             if (!booted)
@@ -1416,6 +2094,8 @@ namespace sleet
                 if (current.quit_requested) break;
 
                 pump_subscription(current);
+
+                if (m_redraw_requested.exchange(false)) current.dirty = true;
 
                 if (current.dirty and !refresh(current, context, measure)) return 1;
 

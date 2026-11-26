@@ -339,6 +339,41 @@ const boost::ut::suite layout_tests = []
         expect(eq(text->size.y, 20.F));
     };
 
+    "floating children are out of flow and painted above"_test = []
+    {
+        auto tree = column()[box() | id("header") | width(100.F) | height(30.F),
+                             box() | id("low") | width(100.F) | height(20.F) | floating()
+                                 | placement(0.F, 35.F) | z_index(5),
+                             box() | id("high") | width(100.F) | height(20.F) | floating()
+                                 | placement(10.F, 40.F) | z_index(10),
+                             box() | id("after") | width(100.F) | height(10.F)]
+                  | width(100.F);
+
+        const auto  result = layout_of(tree);
+        const auto *header = result.find("header");
+        const auto *low    = result.find("low");
+        const auto *high   = result.find("high");
+        const auto *after  = result.find("after");
+
+        expect(header != nullptr);
+        expect(low != nullptr);
+        expect(high != nullptr);
+        expect(after != nullptr);
+
+        // The floating nodes do not consume flow space.
+        expect(eq(after->position.y, 30.F));
+        expect(eq(result.root.size.y, 40.F));
+
+        expect(eq(low->position.y, 35.F));
+        expect(eq(high->position.x, 10.F));
+        expect(eq(high->position.y, 40.F));
+
+        // Paint order is ascending z-index.
+        expect(eq(result.floating.size(), 2_u));
+        expect(result.floating[0].id == widget_id { "low" });
+        expect(result.floating[1].id == widget_id { "high" });
+    };
+
     "duplicate explicit ids fail before layout"_test = []
     {
         auto tree = box()[box() | id("same"), box() | id("same")];

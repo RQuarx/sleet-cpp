@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <utility>
 
@@ -23,6 +24,13 @@ namespace sleet::widget
         return _impl::make_modifier([value = std::move(value)](node_data &data)
                                     { data.id = value; });
     }
+
+
+    /// An explicit, stable key. Identical to \c id and easier to read at call
+    /// sites that are built in loops.
+    [[nodiscard]]
+    inline auto key(widget_id value)
+    { return id(std::move(value)); }
 
     [[nodiscard]]
     inline auto gap(float value)
@@ -244,6 +252,20 @@ namespace sleet::widget
     }
 
 
+    /// Sets the corner radius in logical pixels. Values are clamped to zero.
+    [[nodiscard]]
+    inline auto radius(float value)
+    {
+        return _impl::make_modifier(
+            [value](node_data &data)
+            { data.visual.corner_radius = std::isfinite(value) ? std::max(0.F, value) : 0.F; });
+    }
+
+    [[nodiscard]]
+    inline auto corner_radius(float value)
+    { return radius(value); }
+
+
     [[nodiscard]]
     inline auto on_click(std::string action)
     {
@@ -255,6 +277,62 @@ namespace sleet::widget
     inline auto visible(bool value = true)
     {
         return _impl::make_modifier([value](node_data &data) { data.visible = value; });
+    }
+
+
+    /// Takes a node out of its parent's flow. \c placement is relative to the
+    /// parent's content box.
+    [[nodiscard]]
+    inline auto floating(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.floating = value; });
+    }
+
+    [[nodiscard]]
+    inline auto placement(math::vec2 value)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.placement = value; });
+    }
+
+    [[nodiscard]]
+    inline auto placement(float x, float y)
+    { return placement(math::vec2 { x, y }); }
+
+    [[nodiscard]]
+    inline auto offset(float x, float y)
+    { return placement(x, y); }
+
+    [[nodiscard]]
+    inline auto z_index(int value)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.z_index = value; });
+    }
+
+
+    [[nodiscard]]
+    inline auto clip(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.clip_children = value; });
+    }
+
+    [[nodiscard]]
+    inline auto clip_children(bool value = true)
+    { return clip(value); }
+
+
+    /// Makes a clipped node respond to wheel scrolling. The runtime clamps the
+    /// offset to the measured content bounds.
+    [[nodiscard]]
+    inline auto scrollable(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.scrollable = value; });
+    }
+
+
+    [[nodiscard]]
+    inline auto disabled(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.disabled = value; });
     }
 
 

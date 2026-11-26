@@ -7,7 +7,9 @@ values, layout is a pure calculation, and rendering is a thin layer over SDL3.
 It provides primitive `box`, `row`, `column`, and `label` nodes, built-in
 buttons, text inputs, combo boxes, checkboxes, toggles, radio buttons, sliders,
 progress bars, separators, spacers, and badges, plus an Elm-style application
-runtime with focus, text editing, and theme support.
+runtime with focus, IME-aware text editing and undo/redo, combo-box keyboard
+navigation, scrolling, floating overlays, stable widget ids, themes, and
+high-DPI antialiased rendering.
 
 ## Documentation
 

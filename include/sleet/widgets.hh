@@ -98,6 +98,17 @@ namespace sleet::widget
                    std::string              hint = {},
                    std::source_location origin = std::source_location::current()) -> combo_box_node;
 
+    /// A combo box whose options have explicit, stable identities. Use this
+    /// overload when the option list is reordered or filtered between frames.
+    /// \param option_ids One id per option; extra ids are ignored.
+    [[nodiscard]]
+    auto combo_box(std::string              value,
+                   std::vector<std::string> options,
+                   std::vector<widget_id>   option_ids,
+                   std::string              action,
+                   std::string              hint = {},
+                   std::source_location origin = std::source_location::current()) -> combo_box_node;
+
     /// A checkbox with a text label.
     /// \param text The label.
     /// \param is_checked Whether the box is checked.

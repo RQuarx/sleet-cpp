@@ -28,39 +28,54 @@ namespace
                       std::optional<float>                              width_limit,
                       const sleet::txt::line_measurer &measure_line) -> kei::result<std::size_t>
     {
-        std::size_t last_fit = std::numeric_limits<std::size_t>::max();
-        std::size_t chosen   = text.size();
+        const auto first
+            = std::find_if(opportunities.begin(), opportunities.end(),
+                           [start](const auto &opportunity) { return opportunity.offset > start; });
+        if (first == opportunities.end()) return text.size();
 
-        for (const auto &opportunity : opportunities)
+        // A line never crosses a mandatory break. Find the first one so the
+        // search below only considers candidates on this line.
+        const auto limit
+            = std::find_if(first, opportunities.end(), [](const auto &opportunity)
+                           { return opportunity.kind == sleet::txt::break_kind::mandatory; });
+
+        const auto last = limit == opportunities.end() ? opportunities.end() - 1 : limit;
+
+        // Without a width limit, only mandatory breaks matter; no measurement
+        // is needed to choose the line.
+        if (!width_limit) return last->offset;
+
+        // Prefix widths are monotonic for a single line, so the last candidate
+        // that fits can be found with a binary search. This keeps wrapping a
+        // long paragraph at O(log n) measurements per line instead of
+        // re-measuring every prefix.
+        auto       best  = std::numeric_limits<std::size_t>::max();
+        const auto count = static_cast<std::size_t>(std::distance(first, last)) + 1;
+        auto       lo    = std::size_t { 0 };
+        auto       hi    = count;
+
+        while (lo < hi)
         {
-            if (opportunity.offset <= start) continue;
-
-            const auto candidate = trim_line_end(text.substr(start, opportunity.offset - start));
+            const auto  mid         = lo + ((hi - lo) / 2);
+            const auto &opportunity = *(first + static_cast<std::ptrdiff_t>(mid));
+            const auto  candidate   = trim_line_end(text.substr(start, opportunity.offset - start));
 
             auto width = measure_line(candidate);
             if (!width) return std::move(width.error()).unexpected();
 
-            const bool mandatory = opportunity.kind == sleet::txt::break_kind::mandatory
-                                or opportunity.offset >= text.size();
-
-            if (width_limit and *width > *width_limit)
+            if (*width <= *width_limit)
             {
-                chosen = last_fit == std::numeric_limits<std::size_t>::max() ? opportunity.offset
-                                                                             : last_fit;
-                break;
+                best = opportunity.offset;
+                lo   = mid + 1;
             }
-
-            last_fit = opportunity.offset;
-
-            if (mandatory)
-            {
-                chosen = opportunity.offset;
-                break;
-            }
+            else
+                hi = mid;
         }
 
-        if (chosen <= start) chosen = text.size();
-        return chosen;
+        // A single unbreakable word overflows instead of disappearing. The
+        // caller will measure the resulting line once more.
+        if (best == std::numeric_limits<std::size_t>::max()) return first->offset;
+        return best;
     }
 }
 

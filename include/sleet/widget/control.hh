@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 
 
 namespace sleet::widget
@@ -79,19 +80,37 @@ namespace sleet::widget
     [[nodiscard]]
     auto clamp_offset(std::string_view text, std::size_t offset) noexcept -> std::size_t;
 
-    /// Moves one code point to the left.
+    /// Moves one grapheme cluster to the left. Combining marks, variation
+    /// selectors, emoji modifiers, ZWJ sequences, and regional-indicator pairs
+    /// stay together.
     /// \param text Valid UTF-8 text.
     /// \param offset A byte offset on a code point boundary.
     /// \return The previous boundary, or zero at the start.
     [[nodiscard]]
     auto previous_offset(std::string_view text, std::size_t offset) noexcept -> std::size_t;
 
-    /// Moves one code point to the right.
+    /// Moves one grapheme cluster to the right.
     /// \param text Valid UTF-8 text.
     /// \param offset A byte offset on a code point boundary.
     /// \return The next boundary, or the end of the text.
     [[nodiscard]]
     auto next_offset(std::string_view text, std::size_t offset) noexcept -> std::size_t;
+
+    /// Moves to the start of the previous word. Whitespace and punctuation are
+    /// skipped first, then the word itself.
+    [[nodiscard]]
+    auto previous_word_offset(std::string_view text, std::size_t offset) noexcept -> std::size_t;
+
+    /// Moves to the end of the current word, or past the current run of
+    /// non-word characters.
+    [[nodiscard]]
+    auto next_word_offset(std::string_view text, std::size_t offset) noexcept -> std::size_t;
+
+    /// Returns the word surrounding \p offset, or the adjacent run of
+    /// non-word characters when the caret is not inside a word.
+    [[nodiscard]]
+    auto word_range_at(std::string_view text, std::size_t offset) noexcept
+        -> std::pair<std::size_t, std::size_t>;
 
     /// Selects the whole string.
     /// \param text The text to select.
@@ -126,6 +145,12 @@ namespace sleet::widget
     /// \param selection The selection to update.
     /// \return \c true when the text changed.
     auto erase_forward(std::string &text, text_selection &selection) noexcept -> bool;
+
+    /// Deletes the selection, or the word before the caret.
+    auto erase_word_backward(std::string &text, text_selection &selection) noexcept -> bool;
+
+    /// Deletes the selection, or the word after the caret.
+    auto erase_word_forward(std::string &text, text_selection &selection) noexcept -> bool;
 
     /// Copies the selected range.
     /// \param text The source text.

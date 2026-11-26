@@ -151,5 +151,9 @@ namespace sleet::widget
         std::optional<color> foreground;
         std::optional<color> border;
         float                border_width = 1.F;
+
+        /// Corner radius in logical pixels. \c std::nullopt asks the renderer
+        /// for the theme's default control radius.
+        std::optional<float> corner_radius;
     };
 }

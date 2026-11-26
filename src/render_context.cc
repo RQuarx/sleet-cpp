@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <SDL3_ttf/SDL_ttf.h>
+#include <utf8.h>
 
 #include "sleet/render_context.hh"
 #include "sleet/text/wrap.hh"
@@ -87,6 +88,7 @@ namespace
     {
         font_role          role  = font_role::body;
         int                size  = 16;
+        int                face  = 0;
         TTF_FontStyleFlags flags = TTF_STYLE_NORMAL;
 
         [[nodiscard]] friend auto operator==(font_key, font_key) noexcept -> bool = default;
@@ -100,6 +102,7 @@ namespace
         {
             auto seed = std::hash<int> {}(static_cast<int>(key.role));
             seed     ^= std::hash<int> {}(key.size) + 0x9E3779B9U + (seed << 6U) + (seed >> 2U);
+            seed     ^= std::hash<int> {}(key.face) + 0x9E3779B9U + (seed << 6U) + (seed >> 2U);
             seed     ^= std::hash<TTF_FontStyleFlags> {}(key.flags) + 0x9E3779B9U + (seed << 6U)
                       + (seed >> 2U);
             return seed;
@@ -142,7 +145,23 @@ namespace
     {
         SDL_Texture *texture = nullptr;
         vec2         size {};
+        std::size_t  last_used = 0;
     };
+
+
+    [[nodiscard]]
+    constexpr auto mix(color first, color second, float amount) noexcept -> color
+    {
+        const auto t     = std::clamp(amount, 0.F, 1.F);
+        const auto blend = [t](std::uint8_t a, std::uint8_t b)
+        {
+            return static_cast<std::uint8_t>(std::lround(
+                static_cast<float>(a) + (static_cast<float>(b) - static_cast<float>(a)) * t));
+        };
+
+        return { blend(first.r, second.r), blend(first.g, second.g), blend(first.b, second.b),
+                 blend(first.a, second.a) };
+    }
 
 
     struct text_clip
@@ -150,6 +169,244 @@ namespace
         bool     had_clip = false;
         SDL_Rect previous {};
     };
+
+
+    [[nodiscard]]
+    auto vertex(SDL_FPoint point, color value) noexcept -> SDL_Vertex
+    {
+        return {
+            .position = point,
+            .color = { static_cast<float>(value.r) / 255.F, static_cast<float>(value.g) / 255.F,
+                      static_cast<float>(value.b) / 255.F, static_cast<float>(value.a) / 255.F },
+            .tex_coord = { 0.F, 0.F },
+        };
+    }
+
+
+    /// Builds a clockwise rounded-rectangle contour. \p inflate expands the
+    /// rectangle and its radius; negative values shrink both.
+    [[nodiscard]]
+    auto rounded_contour(const rect &bounds, float radius, float inflate) -> std::vector<SDL_FPoint>
+    {
+        const auto x = bounds.position.x - inflate;
+        const auto y = bounds.position.y - inflate;
+        const auto w = std::max(0.F, bounds.size.x + (inflate * 2.F));
+        const auto h = std::max(0.F, bounds.size.y + (inflate * 2.F));
+        const auto r = std::clamp(radius + inflate, 0.F, std::min(w, h) / 2.F);
+
+        constexpr auto segments = 8;
+        constexpr auto pi       = 3.14159265358979323846F;
+        constexpr auto half_pi  = pi / 2.F;
+
+        std::vector<SDL_FPoint> points;
+        points.reserve(4 * (segments + 1));
+
+        const auto arc = [&](float cx, float cy, float start, float end)
+        {
+            for (int i = 0; i <= segments; i++)
+            {
+                const auto angle
+                    = start
+                    + ((end - start) * static_cast<float>(i) / static_cast<float>(segments));
+                points.push_back({ cx + (r * std::cos(angle)), cy + (r * std::sin(angle)) });
+            }
+        };
+
+        // Screen coordinates point down, so this walks clockwise starting at
+        // the left edge.
+        arc(x + r, y + r, pi, pi + half_pi);
+        arc(x + w - r, y + r, pi + half_pi, 2.F * pi);
+        arc(x + w - r, y + h - r, 0.F, half_pi);
+        arc(x + r, y + h - r, half_pi, pi);
+        return points;
+    }
+
+
+    [[nodiscard]]
+    auto render_geometry(SDL_Renderer *renderer, const std::vector<SDL_Vertex> &vertices)
+        -> kei::result<>
+    {
+        if (vertices.empty()) return {};
+        if (!SDL_RenderGeometry(renderer, nullptr, vertices.data(),
+                                static_cast<int>(vertices.size()), nullptr, 0))
+            return sleet::sdl_error { "Failed to draw a rounded shape." }.unexpected();
+        return {};
+    }
+
+
+    void emit_triangle(std::vector<SDL_Vertex> &vertices,
+                       SDL_FPoint               a,
+                       SDL_FPoint               b,
+                       SDL_FPoint               c,
+                       color                    ca,
+                       color                    cb,
+                       color                    cc)
+    {
+        vertices.push_back(vertex(a, ca));
+        vertices.push_back(vertex(b, cb));
+        vertices.push_back(vertex(c, cc));
+    }
+
+
+    void emit_strip(std::vector<SDL_Vertex>       &vertices,
+                    const std::vector<SDL_FPoint> &inner,
+                    const std::vector<SDL_FPoint> &outer,
+                    color                          inner_color,
+                    color                          outer_color)
+    {
+        const auto count = std::min(inner.size(), outer.size());
+        if (count < 2) return;
+
+        for (std::size_t i = 0; i < count; i++)
+        {
+            const auto next = (i + 1) % count;
+            emit_triangle(vertices, inner[i], outer[i], outer[next], inner_color, outer_color,
+                          outer_color);
+            emit_triangle(vertices, inner[i], outer[next], inner[next], inner_color, outer_color,
+                          inner_color);
+        }
+    }
+
+
+    [[nodiscard]]
+    auto fill_raw(SDL_Renderer *renderer, const rect &bounds, color fill) -> kei::result<>
+    {
+        if (!SDL_SetRenderDrawColor(renderer, fill.r, fill.g, fill.b, fill.a))
+            return sleet::sdl_error { "Failed to set the fill color." }.unexpected();
+
+        const auto sdl_rect = to_frect(bounds);
+        if (!SDL_RenderFillRect(renderer, &sdl_rect))
+            return sleet::sdl_error { "Failed to fill a rectangle." }.unexpected();
+        return {};
+    }
+
+
+    [[nodiscard]]
+    auto fill_rounded(SDL_Renderer *renderer, const rect &bounds, float radius, color fill)
+        -> kei::result<>
+    {
+        const auto limit = std::min(bounds.size.x, bounds.size.y) / 2.F;
+        radius           = std::clamp(radius, 0.F, std::max(0.F, limit));
+
+        if (radius <= 0.5F) return fill_raw(renderer, bounds, fill);
+        if (bounds.size.x <= 0.F or bounds.size.y <= 0.F) return {};
+
+        const auto solid  = rounded_contour(bounds, radius, -0.5F);
+        const auto outer  = rounded_contour(bounds, radius, 0.5F);
+        const auto center = SDL_FPoint { bounds.center().x, bounds.center().y };
+
+        std::vector<SDL_Vertex> vertices;
+        vertices.reserve((solid.size() * 3) + (solid.size() * 6));
+
+        for (std::size_t i = 0; i < solid.size(); i++)
+        {
+            const auto next = (i + 1) % solid.size();
+            emit_triangle(vertices, center, solid[i], solid[next], fill, fill, fill);
+        }
+
+        const auto faded = color { fill.r, fill.g, fill.b, 0 };
+        emit_strip(vertices, solid, outer, fill, faded);
+        return render_geometry(renderer, vertices);
+    }
+
+
+    [[nodiscard]]
+    auto border_raw(SDL_Renderer *renderer, const rect &bounds, color border, float width)
+        -> kei::result<>
+    {
+        const auto requested = std::isfinite(width) ? std::max(0.F, width) : 0.F;
+        const auto thickness = std::min({ requested, bounds.size.x / 2.F, bounds.size.y / 2.F });
+        if (thickness <= 0.F) return {};
+
+        if (!SDL_SetRenderDrawColor(renderer, border.r, border.g, border.b, border.a))
+            return sleet::sdl_error { "Failed to set the border color." }.unexpected();
+
+        const SDL_FRect edges[] {
+            { bounds.position.x, bounds.position.y, bounds.size.x, thickness },
+            { bounds.position.x, bounds.position.y + bounds.size.y - thickness, bounds.size.x,
+             thickness },
+            { bounds.position.x, bounds.position.y + thickness, thickness,
+             std::max(0.F, bounds.size.y - (thickness * 2.F)) },
+            { bounds.position.x + bounds.size.x - thickness, bounds.position.y + thickness,
+             thickness, std::max(0.F, bounds.size.y - (thickness * 2.F)) },
+        };
+
+        for (const auto &edge : edges)
+            if (!SDL_RenderFillRect(renderer, &edge))
+                return sleet::sdl_error { "Failed to draw a border edge." }.unexpected();
+        return {};
+    }
+
+
+    [[nodiscard]]
+    auto border_rounded(
+        SDL_Renderer *renderer, const rect &bounds, float radius, color border, float width)
+        -> kei::result<>
+    {
+        const auto limit = std::min(bounds.size.x, bounds.size.y) / 2.F;
+        radius           = std::clamp(radius, 0.F, std::max(0.F, limit));
+        if (radius <= 0.5F) return border_raw(renderer, bounds, border, width);
+
+        const auto requested = std::isfinite(width) ? std::max(0.F, width) : 0.F;
+        const auto thickness = std::min({ requested, bounds.size.x / 2.F, bounds.size.y / 2.F });
+        if (thickness <= 0.F) return {};
+
+        const auto inner_bounds = bounds.inset(sleet::math::edge_insets { thickness });
+        const auto inner_radius = std::max(0.F, radius - thickness);
+
+        const auto outer_fade  = rounded_contour(bounds, radius, 0.5F);
+        const auto outer_solid = rounded_contour(bounds, radius, -0.5F);
+        const auto inner_solid = rounded_contour(inner_bounds, inner_radius, 0.5F);
+        const auto inner_fade  = rounded_contour(inner_bounds, inner_radius, -0.5F);
+
+        const auto clear = color { border.r, border.g, border.b, 0 };
+
+        std::vector<SDL_Vertex> vertices;
+        vertices.reserve(outer_fade.size() * 18);
+
+        emit_strip(vertices, outer_solid, outer_fade, border, clear);
+        emit_strip(vertices, outer_solid, inner_solid, border, border);
+        emit_strip(vertices, inner_solid, inner_fade, border, clear);
+        return render_geometry(renderer, vertices);
+    }
+
+
+    [[nodiscard]]
+    auto draw_line_aa(SDL_Renderer *renderer, vec2 from, vec2 to, float thickness, color stroke)
+        -> kei::result<>
+    {
+        const auto dx     = to.x - from.x;
+        const auto dy     = to.y - from.y;
+        const auto length = std::sqrt((dx * dx) + (dy * dy));
+        if (length <= 0.0001F) return {};
+
+        const auto nx    = -dy / length;
+        const auto ny    = dx / length;
+        const auto half  = std::max(0.5F, thickness / 2.F);
+        const auto inner = std::max(0.F, half - 0.5F);
+        const auto outer = half + 0.5F;
+
+        const auto at = [&](vec2 point, float offset)
+        { return SDL_FPoint { point.x + (nx * offset), point.y + (ny * offset) }; };
+
+        const std::vector<SDL_FPoint> inner_contour { at(from, inner), at(to, inner),
+                                                      at(to, -inner), at(from, -inner) };
+        const std::vector<SDL_FPoint> outer_contour { at(from, outer), at(to, outer),
+                                                      at(to, -outer), at(from, -outer) };
+
+        const auto              clear = color { stroke.r, stroke.g, stroke.b, 0 };
+        std::vector<SDL_Vertex> vertices;
+        vertices.reserve(30);
+
+        // Fill the core of the line first, then feather both edges. Drawing
+        // only the inner/outer strips would leave the center transparent.
+        emit_triangle(vertices, inner_contour[0], inner_contour[1], inner_contour[2], stroke,
+                      stroke, stroke);
+        emit_triangle(vertices, inner_contour[0], inner_contour[2], inner_contour[3], stroke,
+                      stroke, stroke);
+        emit_strip(vertices, inner_contour, outer_contour, stroke, clear);
+        return render_geometry(renderer, vertices);
+    }
 }
 
 
@@ -159,11 +416,20 @@ struct sleet::render_context::impl
     widget::theme theme;
     vec2          viewport { 0.F, 0.F };
 
+    /// Physical pixels per logical pixel.
+    float pixel_scale = 1.F;
+
     std::optional<widget::widget_id> hovered;
     std::optional<widget::widget_id> pressed;
     std::optional<widget::widget_id> focused;
     std::optional<widget::widget_id> editing;
     widget::text_selection           selection;
+
+    std::optional<widget::widget_id> preedit_id;
+    std::string                      preedit_text;
+    std::size_t                      preedit_caret = 0;
+
+    std::size_t cache_clock = 0;
 
     std::unordered_map<font_key, TTF_Font *, font_key_hash> fonts;
     std::unordered_map<text_key, text_entry, text_key_hash> text_cache;
@@ -198,6 +464,32 @@ struct sleet::render_context::impl
 
 
     [[nodiscard]]
+    auto to_physical(const rect &logical) const noexcept -> rect
+    {
+        return {
+            { logical.position.x * pixel_scale, logical.position.y * pixel_scale },
+            { logical.size.x * pixel_scale,     logical.size.y * pixel_scale     },
+        };
+    }
+
+
+    [[nodiscard]]
+    auto to_physical(vec2 logical) const noexcept -> vec2
+    { return { logical.x * pixel_scale, logical.y * pixel_scale }; }
+
+
+    void set_pixel_scale(float scale)
+    {
+        if (!std::isfinite(scale) or scale <= 0.F) scale = 1.F;
+        if (std::abs(scale - pixel_scale) < 0.0001F) return;
+
+        pixel_scale = scale;
+        clear_text_cache();
+        clear_fonts();
+    }
+
+
+    [[nodiscard]]
     auto apply_viewport_clip() -> kei::result<>
     {
         if (!std::isfinite(viewport.x) or !std::isfinite(viewport.y) or viewport.x <= 0.F
@@ -208,11 +500,12 @@ struct sleet::render_context::impl
             return {};
         }
 
+        const auto     physical = to_physical(rect { 0.F, 0.F, viewport.x, viewport.y });
         const SDL_Rect clip {
             .x = 0,
             .y = 0,
-            .w = std::max(0, static_cast<int>(std::ceil(viewport.x))),
-            .h = std::max(0, static_cast<int>(std::ceil(viewport.y))),
+            .w = std::max(0, static_cast<int>(std::ceil(physical.size.x))),
+            .h = std::max(0, static_cast<int>(std::ceil(physical.size.y))),
         };
         if (!SDL_SetRenderClipRect(renderer, &clip))
             return sleet::sdl_error { "Failed to set the viewport clip." }.unexpected();
@@ -238,6 +531,35 @@ struct sleet::render_context::impl
     [[nodiscard]]
     auto is_pressed(const node_data &node) const noexcept -> bool
     { return state_matches(node, pressed); }
+
+
+    [[nodiscard]]
+    auto is_disabled(const node_data &node) const noexcept -> bool
+    {
+        for (const auto *current = &node; current != nullptr; current = current->parent)
+            if (current->disabled) return true;
+        return false;
+    }
+
+
+    [[nodiscard]]
+    auto radius_for(const node_data &node) const noexcept -> float
+    {
+        if (node.visual.corner_radius) return *node.visual.corner_radius;
+        if (node.parent == nullptr) return 0.F;
+
+        if (node.control == widget::control_kind::checkbox_indicator) return theme.small_radius;
+
+        if (node.control != widget::control_kind::none or !node.action.empty() or node.focusable)
+            return theme.radius;
+
+        // Tinted primitives (slider segments, separators, dots) are usually
+        // pieces of a larger shape, so they stay square unless the caller asks
+        // for a radius explicitly.
+        if (node.tint != widget::tone::none) return 0.F;
+        if (node.visual.background or node.visual.border) return theme.radius;
+        return 0.F;
+    }
 
 
     [[nodiscard]]
@@ -273,16 +595,28 @@ struct sleet::render_context::impl
 
 
     [[nodiscard]]
-    auto get_font(const font_spec &spec) -> kei::result<TTF_Font *>
+    auto face_at(const font_spec &spec, int index) const noexcept -> const widget::font_face *
     {
-        const auto &face = theme.fonts.face(spec.role);
-        if (face.path.empty())
+        if (index <= 0) return &theme.fonts.face(spec.role);
+        const auto fallback = static_cast<std::size_t>(index - 1);
+        if (fallback >= theme.fonts.fallbacks.size()) return nullptr;
+        return &theme.fonts.fallbacks[fallback];
+    }
+
+
+    [[nodiscard]]
+    auto get_font(const font_spec &spec, int face_index = 0) -> kei::result<TTF_Font *>
+    {
+        const auto *face = face_at(spec, face_index);
+        if (face == nullptr or face->path.empty())
             return sleet::error { "No font configured for the {} role.",
                                   static_cast<int>(spec.role) }
                 .unexpected();
 
-        const auto requested = spec.size.value_or(face.size);
-        const auto size      = std::clamp(std::isfinite(requested) ? requested : 16.F, 1.F, 1024.F);
+        const auto &role_face = theme.fonts.face(spec.role);
+        const auto  requested = spec.size.value_or(role_face.size);
+        const auto  size
+            = std::clamp(std::isfinite(requested) ? requested : 16.F, 1.F, 1024.F) * pixel_scale;
         TTF_FontStyleFlags flags = TTF_STYLE_NORMAL;
 
         if (spec.weight and *spec.weight >= widget::font_weight::semibold) flags |= TTF_STYLE_BOLD;
@@ -294,19 +628,58 @@ struct sleet::render_context::impl
         const font_key key {
             .role  = spec.role,
             .size  = static_cast<int>(std::lround(size * 100.F)),
+            .face  = face_index,
             .flags = flags,
         };
 
         if (const auto it = fonts.find(key); it != fonts.end()) return it->second;
 
-        auto *font = TTF_OpenFont(face.path.c_str(), size);
+        auto *font = TTF_OpenFont(face->path.c_str(), size);
         if (font == nullptr)
-            return sleet::sdl_error { "Failed to open font '{}' at {} px", face.path, size }
+            return sleet::sdl_error { "Failed to open font '{}' at {} px", face->path, size }
                 .unexpected();
 
         TTF_SetFontStyle(font, flags);
         fonts.emplace(key, font);
         return font;
+    }
+
+
+    [[nodiscard]]
+    static auto covers_text(TTF_Font *font, std::string_view text) -> bool
+    {
+        auto       current = text.begin();
+        const auto end     = text.end();
+
+        while (current != end)
+        {
+            const auto code_point = utf8::unchecked::next(current);
+            if (code_point <= 0x20U) continue;
+            if (!TTF_FontHasGlyph(font, code_point)) return false;
+        }
+
+        return true;
+    }
+
+
+    /// Resolves the primary face, or the first fallback face that covers every
+    /// glyph in the run. Mixed-script runs still use one face, but the common
+    /// case (a whole line in another script) renders without tofu.
+    [[nodiscard]]
+    auto get_font_covering(const font_spec &spec, std::string_view text) -> kei::result<TTF_Font *>
+    {
+        auto primary = get_font(spec, 0);
+        if (!primary) return primary;
+        if (text.empty() or covers_text(*primary, text)) return primary;
+
+        for (std::size_t i = 0; i < theme.fonts.fallbacks.size(); i++)
+        {
+            auto fallback = get_font(spec, static_cast<int>(i + 1));
+            if (!fallback) continue;
+            if (covers_text(*fallback, text)) return fallback;
+        }
+
+        return primary;
     }
 
 
@@ -320,16 +693,22 @@ struct sleet::render_context::impl
         if (!TTF_GetStringSize(font, line.data(), line.size(), &width, &height))
             return sleet::sdl_error { "Failed to measure text." }.unexpected();
 
-        return static_cast<float>(width);
+        return static_cast<float>(width) / pixel_scale;
     }
 
 
     [[nodiscard]]
-    auto wrapped_lines(TTF_Font *font, std::string_view text, std::optional<float> width_limit)
+    auto
+    wrapped_lines(const font_spec &spec, std::string_view text, std::optional<float> width_limit)
         -> kei::result<std::vector<sleet::txt::wrapped_line>>
     {
-        const auto measure
-            = [this, font](std::string_view line) { return measure_line(font, line); };
+        const auto measure = [this, &spec](std::string_view line) -> kei::result<float>
+        {
+            auto font = get_font_covering(spec, line);
+            if (!font) return std::move(font.error()).unexpected();
+            return measure_line(*font, line);
+        };
+
         return sleet::txt::wrap(text, width_limit, measure);
     }
 
@@ -340,9 +719,34 @@ struct sleet::render_context::impl
     {
         text_key key { .text = std::string { text }, .font = font, .fg = fg };
 
-        if (const auto it = text_cache.find(key); it != text_cache.end()) return &it->second;
+        if (const auto it = text_cache.find(key); it != text_cache.end())
+        {
+            it->second.last_used = ++cache_clock;
+            return &it->second;
+        }
 
-        if (text_cache.size() > 2048) clear_text_cache();
+        // Evict the least-recently-used quarter instead of throwing away the
+        // whole cache. Re-rendering every visible line after one overflow was
+        // the main cause of scroll and resize hitches.
+        constexpr auto cache_limit = std::size_t { 2048 };
+        if (text_cache.size() >= cache_limit)
+        {
+            using iterator = decltype(text_cache)::iterator;
+            std::vector<iterator> entries;
+            entries.reserve(text_cache.size());
+            for (auto it = text_cache.begin(); it != text_cache.end(); ++it) entries.push_back(it);
+
+            const auto evict = entries.size() / 4;
+            std::nth_element(entries.begin(), entries.begin() + static_cast<std::ptrdiff_t>(evict),
+                             entries.end(), [](iterator first, iterator second)
+                             { return first->second.last_used < second->second.last_used; });
+
+            for (std::size_t i = 0; i < evict; i++)
+            {
+                SDL_DestroyTexture(entries[i]->second.texture);
+                text_cache.erase(entries[i]);
+            }
+        }
 
         auto *surface = TTF_RenderText_Blended(font, text.data(), text.size(), fg.to_sdl());
         if (surface == nullptr) return sleet::sdl_error { "Failed to render text." }.unexpected();
@@ -361,59 +765,33 @@ struct sleet::render_context::impl
             return sleet::sdl_error { "Failed to query the text texture size." }.unexpected();
         }
 
-        auto [it, inserted] = text_cache.emplace(
-            std::move(key), text_entry {
-                                .texture = texture, .size = { width, height }
+        auto [it, inserted] = text_cache.emplace(std::move(key), text_entry {
+                                                                     .texture   = texture,
+                                                                     .size      = { width, height },
+                                                                     .last_used = ++cache_clock,
         });
         return &it->second;
     }
 
 
     [[nodiscard]]
-    auto fill_rect(const rect &value, color fill) -> kei::result<>
-    {
-        if (!SDL_SetRenderDrawColor(renderer, fill.r, fill.g, fill.b, fill.a))
-            return sleet::sdl_error { "Failed to set the fill color." }.unexpected();
-
-        const auto sdl_rect = to_frect(value);
-        if (!SDL_RenderFillRect(renderer, &sdl_rect))
-            return sleet::sdl_error { "Failed to fill a rectangle." }.unexpected();
-
-        return {};
-    }
+    auto fill_logical(const rect &logical, color fill) -> kei::result<>
+    { return fill_raw(renderer, to_physical(logical), fill); }
 
 
     [[nodiscard]]
-    auto draw_border(const rect &value, color border, float width) -> kei::result<>
-    {
-        const auto requested = std::isfinite(width) ? std::max(0.F, width) : 0.F;
-        const auto thickness = std::min({ requested, value.size.x / 2.F, value.size.y / 2.F });
-        if (thickness <= 0.F) return {};
-
-        if (!SDL_SetRenderDrawColor(renderer, border.r, border.g, border.b, border.a))
-            return sleet::sdl_error { "Failed to set the border color." }.unexpected();
-
-        const SDL_FRect edges[] {
-            { value.position.x, value.position.y, value.size.x, thickness },
-            { value.position.x, value.position.y + value.size.y - thickness, value.size.x,
-             thickness },
-            { value.position.x, value.position.y + thickness, thickness,
-             std::max(0.F, value.size.y - (thickness * 2.F)) },
-            { value.position.x + value.size.x - thickness, value.position.y + thickness, thickness,
-             std::max(0.F, value.size.y - (thickness * 2.F)) },
-        };
-
-        for (const auto &edge : edges)
-            if (!SDL_RenderFillRect(renderer, &edge))
-                return sleet::sdl_error { "Failed to draw a border edge." }.unexpected();
-
-        return {};
-    }
+    auto draw_border(const rect &physical, float radius, color border, float width) -> kei::result<>
+    { return border_rounded(renderer, physical, radius, border, width); }
 
 
     [[nodiscard]]
     auto inherited_node_foreground(const node_data &node) const noexcept -> std::optional<color>
     {
+        if (node.control == widget::control_kind::text_input
+            or node.control == widget::control_kind::combo_box
+            or node.control == widget::control_kind::combo_option)
+            if (theme.field.fg) return theme.field.fg;
+
         switch (node.variant)
         {
         case widget::button_variant::primary:  return theme.accent_fg;
@@ -453,10 +831,14 @@ struct sleet::render_context::impl
     auto foreground_for(const node_data &node, const colors &active) const noexcept -> color
     {
         if (node.visual.foreground) return *node.visual.foreground;
+        if (is_disabled(node))
+            return theme.disabled.fg.value_or(
+                theme.muted.value_or(active.fg.value_or(color { 255, 255, 255, 255 })));
         if (const auto inherited = inherited_foreground(node)) return *inherited;
 
         if (node.control == widget::control_kind::text_input
-            or node.control == widget::control_kind::combo_box)
+            or node.control == widget::control_kind::combo_box
+            or node.control == widget::control_kind::combo_option)
             if (theme.field.fg) return *theme.field.fg;
 
         return active.fg.value_or(color { 255, 255, 255, 255 });
@@ -466,15 +848,23 @@ struct sleet::render_context::impl
     [[nodiscard]]
     auto variant_background(const node_data &node) const noexcept -> std::optional<color>
     {
+        std::optional<color> result;
+
         switch (node.variant)
         {
-        case widget::button_variant::primary:  return theme.accent;
-        case widget::button_variant::danger:   return theme.danger;
+        case widget::button_variant::primary:  result = theme.accent; break;
+        case widget::button_variant::danger:   result = theme.danger; break;
         case widget::button_variant::ghost:
         case widget::button_variant::standard: break;
         }
 
-        return std::nullopt;
+        if (!result) return std::nullopt;
+
+        // Accent and danger surfaces need their own hover/pressed feedback;
+        // the generic base colors would turn them gray.
+        if (is_pressed(node)) return mix(*result, color { 0, 0, 0, 255 }, 0.18F);
+        if (is_hovered(node)) return mix(*result, color { 255, 255, 255, 255 }, 0.12F);
+        return result;
     }
 
 
@@ -491,7 +881,7 @@ struct sleet::render_context::impl
         case widget::control_kind::combo_option:
             if (is_pressed(node)) return theme.clicked.bg;
             if (is_hovered(node)) return theme.hover.bg;
-            return std::nullopt;
+            return theme.field.bg ? theme.field.bg : theme.base.bg;
         case widget::control_kind::checkbox_indicator:
         case widget::control_kind::radio_indicator:
             return node.checked ? theme.accent : theme.field.bg;
@@ -503,8 +893,10 @@ struct sleet::render_context::impl
     }
 
 
+    /// The background a node would paint while enabled. Disabled nodes use this
+    /// to tell surfaces apart from labels and transparent layout containers.
     [[nodiscard]]
-    auto background_for(const node_data &node, const colors &active) const noexcept
+    auto enabled_background(const node_data &node, const colors &active) const noexcept
         -> std::optional<color>
     {
         if (node.visual.background) return node.visual.background;
@@ -517,6 +909,9 @@ struct sleet::render_context::impl
             return std::nullopt;
         }
 
+        // Menu rows only paint a background while highlighted.
+        if (node.control == widget::control_kind::combo_option) return control_background(node);
+
         if (const auto variant = variant_background(node)) return variant;
         if (const auto control = control_background(node)) return control;
         if (const auto tinted = theme_color(node.tint)) return tinted;
@@ -527,10 +922,27 @@ struct sleet::render_context::impl
 
 
     [[nodiscard]]
-    auto border_for(const node_data &node) const noexcept -> std::optional<color>
+    auto background_for(const node_data &node, const colors &active) const noexcept
+        -> std::optional<color>
+    {
+        const auto normal = enabled_background(node, active);
+        if (!is_disabled(node)) return normal;
+
+        // Recolor existing surfaces instead of adding one to every descendant;
+        // otherwise a disabled container paints a box behind each label. Mute
+        // toward the disabled color rather than replacing every surface with
+        // it, so thumbs, tracks, and filled indicators keep their shapes.
+        if (!normal) return std::nullopt;
+        if (!theme.disabled.bg) return normal;
+        return mix(*normal, *theme.disabled.bg, 0.6F);
+    }
+
+
+    /// The border a node would paint while enabled.
+    [[nodiscard]]
+    auto enabled_border(const node_data &node) const noexcept -> std::optional<color>
     {
         if (node.visual.border) return node.visual.border;
-
         if (focused and *focused == node.id) return theme.focus;
 
         switch (node.control)
@@ -540,7 +952,7 @@ struct sleet::render_context::impl
         case widget::control_kind::checkbox_indicator:
         case widget::control_kind::radio_indicator:
             return node.checked ? theme.accent : theme.border;
-        case widget::control_kind::combo_option:
+        case widget::control_kind::combo_option: return std::nullopt;
         case widget::control_kind::slider:
         case widget::control_kind::none:         break;
         }
@@ -548,6 +960,15 @@ struct sleet::render_context::impl
         if (node.variant == widget::button_variant::ghost) return std::nullopt;
         if (!node.action.empty()) return theme.border;
         return std::nullopt;
+    }
+
+
+    [[nodiscard]]
+    auto border_for(const node_data &node) const noexcept -> std::optional<color>
+    {
+        const auto normal = enabled_border(node);
+        if (!is_disabled(node) or !normal) return normal;
+        return theme.disabled_border.value_or(*normal);
     }
 
 
@@ -563,11 +984,17 @@ struct sleet::render_context::impl
     auto draw_text_frame(const node_data &node, const rect &bounds, const colors &active)
         -> kei::result<>
     {
+        const auto physical = to_physical(bounds);
+        const auto radius   = radius_for(node) * pixel_scale;
+
         if (const auto background = background_for(node, active))
-            if (auto res = fill_rect(bounds, *background); !res) return res;
+            if (auto res = fill_rounded(renderer, physical, radius, *background); !res) return res;
 
         if (const auto border = border_for(node))
-            if (auto res = draw_border(bounds, *border, border_width_for(node)); !res) return res;
+            if (auto res
+                = draw_border(physical, radius, *border, border_width_for(node) * pixel_scale);
+                !res)
+                return res;
 
         return {};
     }
@@ -582,16 +1009,13 @@ struct sleet::render_context::impl
         if (state.had_clip and !SDL_GetRenderClipRect(renderer, &state.previous))
             return sleet::sdl_error { "Failed to query the current clip rectangle." }.unexpected();
 
-        auto clip = to_sdl_rect(content);
-        if (state.had_clip)
-        {
-            clip = intersect(clip, state.previous);
+        auto clip = to_sdl_rect(to_physical(content));
+        if (state.had_clip) clip = intersect(clip, state.previous);
 
-            // SDL treats an empty clip rectangle as "clipping disabled". If the
-            // text falls completely outside the current clip, skip it rather
-            // than let it draw over the rest of the frame.
-            if (clip.w <= 0 or clip.h <= 0) return std::optional<text_clip> {};
-        }
+        // SDL treats an empty clip rectangle as "clipping disabled". If the
+        // content falls completely outside the current clip, or the clip box
+        // itself is empty, skip it rather than let it draw over the frame.
+        if (clip.w <= 0 or clip.h <= 0) return std::optional<text_clip> {};
 
         if (!SDL_SetRenderClipRect(renderer, &clip))
             return sleet::sdl_error { "Failed to set the text clip rectangle." }.unexpected();
@@ -612,7 +1036,7 @@ struct sleet::render_context::impl
     [[nodiscard]]
     auto draw_text_line(const node_data         &node,
                         const rect              &content,
-                        TTF_Font                *font,
+                        const font_spec         &spec,
                         color                    fg,
                         const txt::wrapped_line &line,
                         std::size_t              index,
@@ -621,14 +1045,24 @@ struct sleet::render_context::impl
     {
         if (line.text.empty()) return {};
 
-        auto entry = get_text_texture(line.text, font, fg);
+        auto font = get_font_covering(spec, line.text);
+        if (!font) return std::move(font.error()).unexpected();
+
+        auto entry = get_text_texture(line.text, *font, fg);
         if (!entry) return std::move(entry.error()).unexpected();
 
-        const auto      x_offset = align_offset(node.alignment.x, content.size.x - line.width);
+        const auto logical_height = (*entry)->size.y / pixel_scale;
+        const auto x_offset       = align_offset(node.alignment.x, content.size.x - line.width);
+        const auto x              = (content.position.x + x_offset) * pixel_scale;
+        const auto y = (content.position.y + y_offset + (line_height * static_cast<float>(index))
+                        + ((line_height - logical_height) / 2.F))
+                     * pixel_scale;
+
+        // Snapping the glyph texture to a physical pixel keeps the rasterized
+        // glyphs crisp instead of resampling them at a fractional offset.
         const SDL_FRect destination {
-            content.position.x + x_offset,
-            content.position.y + y_offset + (line_height * static_cast<float>(index))
-                + ((line_height - (*entry)->size.y) / 2.F),
+            std::round(x),
+            std::round(y),
             (*entry)->size.x,
             (*entry)->size.y,
         };
@@ -643,17 +1077,19 @@ struct sleet::render_context::impl
     [[nodiscard]]
     auto draw_text_lines(const node_data                      &node,
                          const rect                           &content,
+                         const font_spec                      &spec,
                          TTF_Font                             *font,
                          color                                 fg,
                          const std::vector<txt::wrapped_line> &lines) -> kei::result<>
     {
-        const auto line_height  = static_cast<float>(std::max(1, TTF_GetFontHeight(font)));
+        const auto line_height
+            = static_cast<float>(std::max(1, TTF_GetFontHeight(font))) / pixel_scale;
         const auto total_height = line_height * static_cast<float>(lines.size());
         const auto y_offset     = align_offset(node.alignment.y, content.size.y - total_height);
 
         for (std::size_t i = 0; i < lines.size(); i++)
             if (auto res
-                = draw_text_line(node, content, font, fg, lines[i], i, line_height, y_offset);
+                = draw_text_line(node, content, spec, fg, lines[i], i, line_height, y_offset);
                 !res)
                 return res;
 
@@ -720,21 +1156,28 @@ struct sleet::render_context::impl
         };
 
         if (highlight.size.x <= 0.F) return {};
-        return fill_rect(highlight, theme.selection.value_or(color { 47, 95, 168, 255 }));
+        return fill_logical(highlight, theme.selection.value_or(color { 47, 95, 168, 255 }));
     }
 
 
     [[nodiscard]]
-    auto draw_text_input(const node_data &node, const rect &bounds, TTF_Font *font, color fg)
-        -> kei::result<>
+    auto draw_text_input(const node_data &node, const rect &bounds, color fg) -> kei::result<>
     {
         const auto content = bounds.inset(node.padding);
         if (content.size.x <= 0.F or content.size.y <= 0.F) return {};
 
         const bool is_editing = editing and *editing == node.id;
-        const auto text       = std::string_view { node.text };
-        const auto display    = text.empty() ? std::string_view { node.placeholder } : text;
-        const auto text_color = text.empty() ? theme.muted.value_or(fg) : fg;
+        const bool has_preedit
+            = is_editing and preedit_id and *preedit_id == node.id and !preedit_text.empty();
+        const auto text    = std::string_view { node.text };
+        const auto display = text.empty() ? (has_preedit ? std::string_view {}
+                                                         : std::string_view { node.placeholder })
+                                          : text;
+        const auto text_color
+            = text.empty() ? (is_disabled(node) ? fg : theme.muted.value_or(fg)) : fg;
+
+        auto font = get_font_covering(node.font, display);
+        if (!font) return std::move(font.error()).unexpected();
 
         auto clip = enter_text_clip(content);
         if (!clip) return std::move(clip.error()).unexpected();
@@ -750,23 +1193,25 @@ struct sleet::render_context::impl
         auto view = text_input_view {};
         if (is_editing)
         {
-            auto computed = text_input_caret(font, text, content.size.x);
+            auto computed = text_input_caret(*font, text, content.size.x);
             if (!computed) return restore_after(std::move(computed.error()).unexpected());
             view = *computed;
         }
 
         if (is_editing)
-            if (auto res = draw_text_selection(content, font, text, view.scroll); !res)
+            if (auto res = draw_text_selection(content, *font, text, view.scroll); !res)
                 return restore_after(std::move(res));
 
         if (!display.empty())
         {
-            auto entry = get_text_texture(display, font, text_color);
+            auto entry = get_text_texture(display, *font, text_color);
             if (!entry) return restore_after(std::move(entry.error()).unexpected());
 
+            const auto      logical_height = (*entry)->size.y / pixel_scale;
             const SDL_FRect destination {
-                content.position.x - view.scroll,
-                content.position.y + ((content.size.y - (*entry)->size.y) / 2.F),
+                std::round((content.position.x - view.scroll) * pixel_scale),
+                std::round((content.position.y + ((content.size.y - logical_height) / 2.F))
+                           * pixel_scale),
                 (*entry)->size.x,
                 (*entry)->size.y,
             };
@@ -775,16 +1220,58 @@ struct sleet::render_context::impl
                 return restore_after(sleet::sdl_error { "Failed to draw text." }.unexpected());
         }
 
+        auto caret_x = view.caret_x;
+
+        if (has_preedit)
+        {
+            auto preedit_font = get_font_covering(node.font, preedit_text);
+            if (!preedit_font) return restore_after(std::move(preedit_font.error()).unexpected());
+
+            auto preedit = get_text_texture(preedit_text, *preedit_font, fg);
+            if (!preedit) return restore_after(std::move(preedit.error()).unexpected());
+
+            const auto caret_offset = widget::clamp_offset(preedit_text, preedit_caret);
+            auto       prefix_width = measure_line(
+                *preedit_font, std::string_view { preedit_text }.substr(0, caret_offset));
+            if (!prefix_width) return restore_after(std::move(prefix_width.error()).unexpected());
+
+            auto width = measure_line(*preedit_font, preedit_text);
+            if (!width) return restore_after(std::move(width.error()).unexpected());
+
+            const auto      logical_height = (*preedit)->size.y / pixel_scale;
+            const SDL_FRect destination {
+                std::round((content.position.x + caret_x - view.scroll) * pixel_scale),
+                std::round((content.position.y + ((content.size.y - logical_height) / 2.F))
+                           * pixel_scale),
+                (*preedit)->size.x,
+                (*preedit)->size.y,
+            };
+
+            if (!SDL_RenderTexture(renderer, (*preedit)->texture, nullptr, &destination))
+                return restore_after(sleet::sdl_error { "Failed to draw text." }.unexpected());
+
+            const rect underline {
+                content.position.x + caret_x - view.scroll,
+                content.position.y + content.size.y - 2.F,
+                *width,
+                1.F,
+            };
+            if (auto res = fill_logical(underline, theme.caret.value_or(fg)); !res)
+                return restore_after(std::move(res));
+
+            caret_x += *prefix_width;
+        }
+
         if (is_editing)
         {
             const rect caret_rect {
-                content.position.x + view.caret_x - view.scroll,
+                content.position.x + caret_x - view.scroll,
                 content.position.y + 2.F,
                 2.F,
                 std::max(0.F, content.size.y - 4.F),
             };
 
-            if (auto res = fill_rect(caret_rect, theme.caret.value_or(fg)); !res)
+            if (auto res = fill_logical(caret_rect, theme.caret.value_or(fg)); !res)
                 return restore_after(std::move(res));
         }
 
@@ -805,11 +1292,11 @@ struct sleet::render_context::impl
         if (auto res = draw_text_frame(node, bounds, active); !res) return res;
 
         if (node.control == widget::control_kind::text_input)
-            return draw_text_input(node, bounds, *font, fg);
+            return draw_text_input(node, bounds, fg);
 
         if (content.size.x <= 0.F or content.size.y <= 0.F) return {};
 
-        auto lines = wrapped_lines(*font, node.text, content.size.x);
+        auto lines = wrapped_lines(node.font, node.text, content.size.x);
         if (!lines) return std::move(lines.error()).unexpected();
         if (lines->empty()) return {};
 
@@ -817,7 +1304,7 @@ struct sleet::render_context::impl
         if (!clip) return std::move(clip.error()).unexpected();
         if (!*clip) return {};
 
-        auto drawn    = draw_text_lines(node, content, *font, fg, *lines);
+        auto drawn    = draw_text_lines(node, content, node.font, *font, fg, *lines);
         auto restored = leave_text_clip(**clip);
 
         if (!drawn) return drawn;
@@ -827,41 +1314,47 @@ struct sleet::render_context::impl
 
 
     [[nodiscard]]
-    auto draw_check(const rect &bounds, color stroke) -> kei::result<>
+    auto draw_check(const rect &physical, color stroke) -> kei::result<>
     {
-        if (!SDL_SetRenderDrawColor(renderer, stroke.r, stroke.g, stroke.b, stroke.a))
-            return sleet::sdl_error { "Failed to set the indicator color." }.unexpected();
+        const auto x = physical.position.x;
+        const auto y = physical.position.y;
+        const auto w = physical.size.x;
+        const auto h = physical.size.y;
 
-        const auto x = bounds.position.x;
-        const auto y = bounds.position.y;
-        const auto w = bounds.size.x;
-        const auto h = bounds.size.y;
+        if (auto res
+            = draw_line_aa(renderer, { x + (w * 0.20F), y + (h * 0.52F) },
+                           { x + (w * 0.42F), y + (h * 0.75F) }, 2.F * pixel_scale, stroke);
+            !res)
+            return res;
 
-        if (!SDL_RenderLine(renderer, x + (w * 0.20F), y + (h * 0.52F), x + (w * 0.42F),
-                            y + (h * 0.75F)))
-            return sleet::sdl_error { "Failed to draw a check mark." }.unexpected();
-        if (!SDL_RenderLine(renderer, x + (w * 0.42F), y + (h * 0.75F), x + (w * 0.82F),
-                            y + (h * 0.26F)))
-            return sleet::sdl_error { "Failed to draw a check mark." }.unexpected();
-
-        return {};
+        return draw_line_aa(renderer, { x + (w * 0.42F), y + (h * 0.75F) },
+                            { x + (w * 0.82F), y + (h * 0.26F) }, 2.F * pixel_scale, stroke);
     }
 
 
     [[nodiscard]]
-    auto draw_indicator(const node_data &node, const rect &bounds) -> kei::result<>
+    auto draw_indicator(const node_data &node, const rect &physical_bounds) -> kei::result<>
     {
         if (!node.checked) return {};
 
         const auto stroke
-            = theme.accent_fg.value_or(theme.base.fg.value_or(color { 255, 255, 255, 255 }));
+            = is_disabled(node)
+                ? theme.disabled.fg.value_or(
+                      theme.muted.value_or(theme.accent_fg.value_or(color { 255, 255, 255, 255 })))
+                : theme.accent_fg.value_or(theme.base.fg.value_or(color { 255, 255, 255, 255 }));
 
         switch (node.control)
         {
         case widget::control_kind::checkbox_indicator:
-            return draw_check(bounds.inset(sleet::math::edge_insets { 3.F }), stroke);
+            return draw_check(physical_bounds.inset(sleet::math::edge_insets { 3.F * pixel_scale }),
+                              stroke);
         case widget::control_kind::radio_indicator:
-            return fill_rect(bounds.inset(sleet::math::edge_insets { 5.F }), stroke);
+            {
+                const auto inner
+                    = physical_bounds.inset(sleet::math::edge_insets { 5.F * pixel_scale });
+                return fill_rounded(renderer, inner, std::min(inner.size.x, inner.size.y) / 2.F,
+                                    stroke);
+            }
         case widget::control_kind::none:
         case widget::control_kind::text_input:
         case widget::control_kind::combo_box:
@@ -885,23 +1378,104 @@ struct sleet::render_context::impl
 
         if (node.is_text()) return draw_text(node, *bounds);
 
-        const auto active = active_colors(node);
+        const auto active   = active_colors(node);
+        const auto physical = to_physical(*bounds);
+        const auto radius   = radius_for(node) * pixel_scale;
 
         if (const auto background = background_for(node, active))
-            if (auto res = fill_rect(*bounds, *background); !res) return res;
+            if (auto res = fill_rounded(renderer, physical, radius, *background); !res) return res;
 
         if (const auto border = border_for(node))
-            if (auto res = draw_border(*bounds, *border, border_width_for(node)); !res) return res;
+            if (auto res
+                = draw_border(physical, radius, *border, border_width_for(node) * pixel_scale);
+                !res)
+                return res;
 
         if (node.control == widget::control_kind::checkbox_indicator
             or node.control == widget::control_kind::radio_indicator)
-            if (auto res = draw_indicator(node, *bounds); !res) return res;
+            if (auto res = draw_indicator(node, physical); !res) return res;
+
+        auto clip = std::optional<text_clip> {};
+        if (node.clip_children)
+        {
+            auto entered = enter_text_clip(*bounds);
+            if (!entered) return std::move(entered.error()).unexpected();
+            if (!*entered) return {};
+            clip = **entered;
+        }
 
         for (const auto &child : node.children)
+        {
+            if (child.floating) continue;
             if (auto result = draw_node(child, layout); !result)
+            {
+                if (clip) (void)leave_text_clip(*clip);
                 return std::move(result.error()).unexpected();
+            }
+        }
+
+        if (clip)
+            if (auto res = leave_text_clip(*clip); !res) return res;
 
         return {};
+    }
+
+
+    /// Applies every clipping ancestor of a floating node. Floating nodes are
+    /// painted in a separate pass, so they cannot rely on draw_node's recursive
+    /// clip stack.
+    [[nodiscard]]
+    auto enter_ancestor_clips(const node_data &node, const widget::layout_result &layout)
+        -> kei::result<std::optional<std::vector<text_clip>>>
+    {
+        auto states = std::vector<text_clip> {};
+
+        for (auto *current = node.parent; current != nullptr; current = current->parent)
+        {
+            if (!current->clip_children) continue;
+
+            const auto *bounds = layout.find(current->id);
+            if (bounds == nullptr) continue;
+
+            auto entered = enter_text_clip(*bounds);
+            if (!entered) return std::move(entered.error()).unexpected();
+            if (!*entered)
+            {
+                for (auto it = states.rbegin(); it != states.rend(); ++it)
+                    if (auto res = leave_text_clip(*it); !res)
+                        return std::move(res.error()).unexpected();
+                return std::optional<std::vector<text_clip>> {};
+            }
+
+            states.push_back(**entered);
+        }
+
+        return std::optional<std::vector<text_clip>> { std::move(states) };
+    }
+
+
+    [[nodiscard]]
+    auto draw_floating(const node_data &node, const widget::layout_result &layout) -> kei::result<>
+    {
+        // A floating node is still part of its parent's subtree. Hide it when
+        // any ancestor is hidden; layout entries alone do not carry that state.
+        for (const auto *current = &node; current != nullptr; current = current->parent)
+            if (!current->visible) return {};
+
+        auto clips = enter_ancestor_clips(node, layout);
+        if (!clips) return std::move(clips.error()).unexpected();
+        if (!*clips) return {};
+
+        auto result = draw_node(node, layout);
+
+        for (auto it = (*clips)->rbegin(); it != (*clips)->rend(); ++it)
+        {
+            auto restored = leave_text_clip(*it);
+            if (!result) continue;
+            if (!restored) result = std::move(restored.error()).unexpected();
+        }
+
+        return result;
     }
 };
 
@@ -934,15 +1508,17 @@ auto sleet::render_context::measure_text(std::string_view         text,
 
     if (text.empty()) return vec2 { 0.F, 0.F };
 
-    auto lines = m_impl->wrapped_lines(*ttf_font, text, width_limit);
+    auto lines = m_impl->wrapped_lines(font, text, width_limit);
     if (!lines) return std::move(lines.error()).unexpected();
     if (lines->empty()) return vec2 { 0.F, 0.F };
 
     float width = 0.F;
     for (const auto &line : *lines) width = std::max(width, line.width);
 
-    const auto line_height = static_cast<float>(std::max(1, TTF_GetFontHeight(*ttf_font)));
-    return vec2 { width, line_height * static_cast<float>(lines->size()) };
+    const auto font_height  = static_cast<float>(std::max(1, TTF_GetFontHeight(*ttf_font)));
+    const auto line_height  = font_height / m_impl->pixel_scale;
+    const auto total_height = line_height * static_cast<float>(lines->size());
+    return vec2 { width, total_height };
 }
 
 
@@ -959,7 +1535,22 @@ auto sleet::render_context::render(const widget::node_data     &root,
 
     if (auto res = m_impl->apply_viewport_clip(); !res) return res;
 
-    auto       result  = m_impl->draw_node(root, layout);
+    auto result = m_impl->draw_node(root, layout);
+
+    // Floating content (combo-box popups and other overlays) is painted above
+    // every in-flow node, in ascending z-order.
+    if (result)
+        for (const auto &entry : layout.floating)
+        {
+            const auto *node = root.find(entry.id);
+            if (node == nullptr or node == &root) continue;
+            if (auto drawn = m_impl->draw_floating(*node, layout); !drawn)
+            {
+                result = std::move(drawn.error()).unexpected();
+                break;
+            }
+        }
+
     const bool cleared = SDL_SetRenderClipRect(m_impl->renderer, nullptr);
 
     if (!result) return result;
@@ -1007,3 +1598,15 @@ void sleet::render_context::set_text_selection(std::optional<widget::widget_id> 
 
 void sleet::render_context::set_viewport(math::vec2 viewport) noexcept
 { m_impl->viewport = viewport; }
+
+void sleet::render_context::set_pixel_scale(float scale) noexcept
+{ m_impl->set_pixel_scale(scale); }
+
+void sleet::render_context::set_preedit(std::optional<widget::widget_id> id,
+                                        std::string                      text,
+                                        std::size_t                      caret) noexcept
+{
+    m_impl->preedit_id    = std::move(id);
+    m_impl->preedit_text  = std::move(text);
+    m_impl->preedit_caret = caret;
+}

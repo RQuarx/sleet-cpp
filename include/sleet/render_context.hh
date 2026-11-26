@@ -1,6 +1,8 @@
 #pragma once
+#include <cstddef>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 
 #include <SDL3/SDL_render.h>
@@ -61,6 +63,19 @@ namespace sleet
                                 widget::text_selection           selection) noexcept;
 
         void set_viewport(math::vec2 viewport) noexcept;
+
+        /// Sets the ratio of physical output pixels to logical layout points.
+        /// Layout stays in points; fonts, shapes, and glyph positions are
+        /// rasterized at \p scale so high-DPI windows stay sharp.
+        void set_pixel_scale(float scale) noexcept;
+
+        /// Sets the in-progress IME composition shown by a text input.
+        /// \param id The editing text input, or \c std::nullopt to clear it.
+        /// \param text The composition text.
+        /// \param caret The caret byte offset inside \p text.
+        void set_preedit(std::optional<widget::widget_id> id,
+                         std::string                      text,
+                         std::size_t                      caret) noexcept;
 
     private:
         struct impl;

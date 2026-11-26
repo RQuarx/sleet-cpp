@@ -1,3 +1,4 @@
+#include <stdexcept>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -63,6 +64,47 @@ const boost::ut::suite node_tests = []
         expect(data.find("missing") == nullptr);
 
         expect(eq(data.children_amount(), 3_u));
+    };
+
+    "generated ids stay stable when unrelated siblings are inserted"_test = []
+    {
+        const auto build = [](bool insert)
+        {
+            auto loop = []
+            {
+                std::vector<node_data> kids;
+                for (int i = 0; i < 2; i++) kids.push_back(to_data(box()));
+                return kids;
+            };
+
+            auto tree = column() | id("root");
+            if (insert) tree = tree[box() | id("extra")];
+            tree = tree[loop];
+
+            auto data = std::move(tree).release();
+            if (const auto result = data.finalize(); !result)
+                throw std::runtime_error { result.error().what() };
+            return data;
+        };
+
+        const auto before = build(false);
+        const auto after  = build(true);
+
+        expect(eq(before.children.size(), 2_u));
+        expect(eq(after.children.size(), 3_u));
+        expect(after.children[0].id == widget_id { "extra" });
+        expect(before.children[0].id == after.children[1].id);
+        expect(before.children[1].id == after.children[2].id);
+    };
+
+    "combo options can use explicit ids"_test = []
+    {
+        auto tree = to_data(combo_box(
+            "", { "A", "B" }, { widget_id { "option-a" }, widget_id { "option-b" } }, "choose"));
+        expect(static_cast<bool>(tree.finalize()));
+        expect(tree.find("option-a") != nullptr);
+        expect(tree.find("option-b") != nullptr);
+        expect(tree.find("option-a")->control == control_kind::combo_option);
     };
 
     "duplicate explicit ids are rejected"_test = []
