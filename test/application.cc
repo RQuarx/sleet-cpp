@@ -823,4 +823,210 @@ const boost::ut::suite application_tests = []
 };
 
 
+const boost::ut::suite overlay_tests = []
+{
+    using namespace boost::ut;
+
+    "modals trap focus, cancel on Escape, and restore focus"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+            bool open    = false;
+            int  ones    = 0;
+            int  twos    = 0;
+            int  cancels = 0;
+        };
+
+        struct message
+        { std::string action; };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto result
+            = app { "sleet-modal-test", 320, 240, std::move(theme) }
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message {} }; })
+                  .on_update(
+                      [](state &current, const message &value) -> kei::result<>
+                      {
+                          if (value.action == "open")
+                              current.open = true;
+                          else if (value.action == "one")
+                              current.ones++;
+                          else if (value.action == "two")
+                              current.twos++;
+                          else if (value.action == "cancel")
+                          {
+                              current.open = false;
+                              current.cancels++;
+                          }
+                          return {};
+                      })
+                  .on_view(
+                      [&observed](const state &current)
+                      {
+                          observed = current;
+
+                          auto view = column();
+                          view      = view[button("Open", "open") | width(120.F) | height(30.F)];
+
+                          if (current.open)
+                          {
+                              auto dialog
+                                  = column()[button("One", "one") | width(90.F) | height(30.F),
+                                             button("Two", "two") | width(90.F) | height(30.F)]
+                                  | modal("cancel") | background_of(tone::field) | padding(12.F)
+                                  | width(200.F);
+                              view = view[std::move(dialog)];
+                          }
+
+                          return view;
+                      })
+                  .on_event(
+                      [](const sleet::event &input) -> std::optional<message>
+                      {
+                          if (input.type == sleet::event::kind::activate
+                              and (input.action == "open" or input.action == "one"
+                                   or input.action == "two"))
+                              return message { input.action };
+
+                          if (input.type == sleet::event::kind::key_down
+                              and input.action == "cancel")
+                              return message { "cancel" };
+
+                          return std::nullopt;
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1:  push_key(SDLK_TAB); break;
+                          case 2:  push_key(SDLK_RETURN); break;
+                          case 3:  push_key(SDLK_RETURN); break;
+                          case 4:  push_key(SDLK_TAB); break;
+                          case 5:  push_key(SDLK_RETURN); break;
+                          case 6:  push_key(SDLK_TAB); break;
+                          case 7:  push_key(SDLK_RETURN); break;
+                          case 8:  push_key(SDLK_ESCAPE); break;
+                          case 9:  push_key(SDLK_RETURN); break;
+                          case 10: push_key(SDLK_ESCAPE); break;
+                          case 11: push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.ones, 2));
+        expect(eq(observed.twos, 1));
+        expect(eq(observed.cancels, 2));
+        expect(!observed.open);
+    };
+};
+
+
+const boost::ut::suite modal_hit_tests = []
+{
+    using namespace boost::ut;
+
+    "a modal blocks clicks outside its surface"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+            bool menu_open = true;
+            int  under     = 0;
+            int  closes    = 0;
+        };
+
+        struct message
+        { std::string action; };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto result
+            = app { "sleet-modal-hit-test", 320, 240, std::move(theme) }
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message {} }; })
+                  .on_update(
+                      [](state &current, const message &value) -> kei::result<>
+                      {
+                          if (value.action == "under")
+                              current.under++;
+                          else if (value.action == "close_menu")
+                          {
+                              current.menu_open = false;
+                              current.closes++;
+                          }
+                          return {};
+                      })
+                  .on_view(
+                      [&observed](const state &current)
+                      {
+                          observed = current;
+
+                          auto view = column();
+                          view      = view[button("Under", "under") | width(200.F) | height(40.F)];
+
+                          if (current.menu_open)
+                              view = view[box() | modal("close_menu") | on_click("close_menu")
+                                          | width(100.F) | height(60.F)];
+
+                          return view;
+                      })
+                  .on_event(
+                      [](const sleet::event &input) -> std::optional<message>
+                      {
+                          if (input.type == sleet::event::kind::mouse_up
+                              and input.button == SDL_BUTTON_LEFT and !input.action.empty())
+                              return message { input.action };
+                          return std::nullopt;
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1:
+                              push_mouse(true, 10.F, 10.F);
+                              push_mouse(false, 10.F, 10.F);
+                              break;
+                          case 2:
+                              push_mouse(true, 10.F, 10.F);
+                              push_mouse(false, 10.F, 10.F);
+                              break;
+                          case 3:  push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.under, 1));
+        expect(eq(observed.closes, 1));
+        expect(!observed.menu_open);
+    };
+};
+
+
 auto main() -> int {}

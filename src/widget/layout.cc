@@ -289,8 +289,10 @@ namespace
               m_content_size { content_size }, m_measure { measure },
               m_main { node.is_row() ? axis::width : axis::height }, m_cross { other(m_main) },
               m_count { node.children.size() },
-              m_main_fit { node.size[static_cast<std::size_t>(m_main)].is_fit() },
-              m_cross_fit { node.size[static_cast<std::size_t>(m_cross)].is_fit() }
+              m_main_fit { node.size[static_cast<std::size_t>(m_main)].is_fit()
+                           and !node.backdrop },
+              m_cross_fit { node.size[static_cast<std::size_t>(m_cross)].is_fit()
+                            and !node.backdrop }
         {
         }
 
@@ -607,8 +609,9 @@ namespace
                         const text_measurer &measure)
             : m_node { node }, m_result { result }, m_content_position { content_position },
               m_content_size { content_size }, m_measure { measure },
-              m_count { node.children.size() }, m_width_fit { node.size.x.is_fit() },
-              m_height_fit { node.size.y.is_fit() }
+              m_count { node.children.size() },
+              m_width_fit { node.size.x.is_fit() and !node.backdrop },
+              m_height_fit { node.size.y.is_fit() and !node.backdrop }
         {
         }
 
@@ -804,12 +807,16 @@ namespace
 
             auto size = result.children[i].intrinsic;
 
-            if (child.size.x.is_fixed())
-                size.x = child.size.x.get_fixed_size();
-            else if (child.size.x.is_fill() or child.size.x.is_grow())
-                size.x = clamp0(content_size.x - child.margin.horizontal());
+            if (child.backdrop) { size = content_size; }
+            else
+            {
+                if (child.size.x.is_fixed())
+                    size.x = child.size.x.get_fixed_size();
+                else if (child.size.x.is_fill() or child.size.x.is_grow())
+                    size.x = clamp0(content_size.x - child.margin.horizontal());
 
-            if (child.size.y.is_fixed()) size.y = child.size.y.get_fixed_size();
+                if (child.size.y.is_fixed()) size.y = child.size.y.get_fixed_size();
+            }
 
             // A floating text node that fills its parent still needs to wrap at
             // the resolved width, just like an in-flow text child.
@@ -817,9 +824,11 @@ namespace
                 !res)
                 return res;
 
-            const auto position = anchor_position(child.placement_anchor, content_position,
-                                                  content_size, size, child.margin)
-                                + child.placement;
+            const auto position = child.backdrop
+                                    ? content_position
+                                    : anchor_position(child.placement_anchor, content_position,
+                                                      content_size, size, child.margin)
+                                          + child.placement;
 
             if (auto res = arrange(child, result.children[i], position, size, measure); !res)
                 return res;

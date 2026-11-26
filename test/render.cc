@@ -63,6 +63,7 @@ const boost::ut::suite render_tests = []
         const auto clear_color = theme.base.bg.value_or(sleet::color { 0, 0, 0, 255 });
         const auto base_bg     = theme.base.bg.value();
         const auto hover_bg    = theme.hover.bg.value();
+        const auto toast_bg    = theme.toast_bg.value();
 
         try
         {
@@ -294,6 +295,90 @@ const boost::ut::suite render_tests = []
                 }
 
                 context.set_scroll_metrics({});
+            }
+
+            // Tooltips draw a bubble under their anchor, clamped to the
+            // viewport, and clear on the next frame.
+            context.set_viewport({ 64.F, 64.F });
+
+            auto plain = to_data(box() | size(sizing::fill()) | background(0xFF0000_rgb));
+            expect(static_cast<bool>(plain.finalize()));
+
+            auto plain_layout = calculate_layout(plain, measure, { 64.F, 64.F });
+            expect(static_cast<bool>(plain_layout));
+            if (plain_layout)
+            {
+                auto spec = font_spec {};
+                spec.role = font_role::caption;
+
+                const auto tip_size = context.measure_text("Tip", spec, std::nullopt);
+                expect(static_cast<bool>(tip_size));
+                if (tip_size)
+                {
+                    const auto bubble_w = tip_size->x + 16.F;
+                    const auto bubble_h = tip_size->y + 10.F;
+                    const auto anchor   = sleet::math::rect { 20.F, 10.F, 24.F, 10.F };
+                    const auto bubble_x = anchor.center().x - (bubble_w / 2.F);
+                    const auto bubble_y = anchor.bottom() + 6.F;
+
+                    context.set_tooltip("Tip", anchor);
+                    expect(static_cast<bool>(context.render(plain, *plain_layout)));
+
+                    auto *pixels = SDL_RenderReadPixels(renderer, nullptr);
+                    expect(pixels != nullptr);
+                    if (pixels != nullptr)
+                    {
+                        const auto sample = [pixels](int x, int y)
+                        {
+                            std::uint8_t r = 0;
+                            std::uint8_t g = 0;
+                            std::uint8_t b = 0;
+                            std::uint8_t a = 0;
+                            expect(SDL_ReadSurfacePixel(pixels, x, y, &r, &g, &b, &a));
+                            return sleet::color { r, g, b, a };
+                        };
+
+                        expect(sample(static_cast<int>(bubble_x) + 2,
+                                      static_cast<int>(bubble_y + (bubble_h / 2.F)))
+                               == toast_bg);
+                        expect(sample(32, 4) == 0xFF0000_rgb);
+                        SDL_DestroySurface(pixels);
+                    }
+
+                    context.clear_tooltip();
+                }
+            }
+
+            // Toasts stack above the content and carry an accent bar.
+            context.set_viewport({ 64.F, 64.F });
+            context.set_toasts({
+                sleet::toast_message { "Saved", 1.F, 0.F }
+            });
+
+            if (plain_layout)
+            {
+                expect(static_cast<bool>(context.render(plain, *plain_layout)));
+
+                auto *pixels = SDL_RenderReadPixels(renderer, nullptr);
+                expect(pixels != nullptr);
+                if (pixels != nullptr)
+                {
+                    const auto sample = [pixels](int x, int y)
+                    {
+                        std::uint8_t r = 0;
+                        std::uint8_t g = 0;
+                        std::uint8_t b = 0;
+                        std::uint8_t a = 0;
+                        expect(SDL_ReadSurfacePixel(pixels, x, y, &r, &g, &b, &a));
+                        return sleet::color { r, g, b, a };
+                    };
+
+                    expect(sample(60, 20) == 0xFF0000_rgb);
+                    expect(sample(40, 20) == toast_bg);
+                    SDL_DestroySurface(pixels);
+                }
+
+                context.set_toasts({});
             }
 
             // Floating content is painted above normal flow, even when it

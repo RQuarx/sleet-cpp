@@ -27,6 +27,9 @@ namespace
         bool        autosave      = false;
         float       volume        = 0.4F;
         std::string picked;
+        std::string menu_choice;
+        bool        menu_open   = false;
+        bool        dialog_open = false;
     };
 
 
@@ -48,6 +51,13 @@ namespace
             toggle_autosave,
             volume_changed,
             scroll_pick,
+            menu_toggle,
+            menu_close,
+            menu_pick,
+            dialog_open,
+            dialog_cancel,
+            dialog_save,
+            toast,
         };
 
 
@@ -111,6 +121,14 @@ namespace
         if (action == "autosave") return message { message::kind::toggle_autosave };
         if (action.starts_with("scroll_"))
             return message { message::kind::scroll_pick, action.substr(7) };
+        if (action == "menu_toggle") return message { message::kind::menu_toggle };
+        if (action == "menu_close") return message { message::kind::menu_close };
+        if (action == "menu_duplicate" or action == "menu_archive" or action == "menu_delete")
+            return message { message::kind::menu_pick, action.substr(5) };
+        if (action == "dialog_open") return message { message::kind::dialog_open };
+        if (action == "dialog_cancel") return message { message::kind::dialog_cancel };
+        if (action == "dialog_save") return message { message::kind::dialog_save };
+        if (action == "toast") return message { message::kind::toast };
         return std::nullopt;
     }
 
@@ -129,13 +147,13 @@ namespace
 
 
     [[nodiscard]]
-    auto view(const state &current) -> column_node
+    auto view(const state &current) -> box_node
     {
         auto header = row()[column()[label("Sleet widget gallery") | text_size(28.F)
                                          | text_role(font_role::heading) | text_color(0xF3F5F8_rgb),
                                      muted("Every built-in widget in one interactive window.")]
                                 | gap(2.F),
-                            spacer(), badge("v1.2")]
+                            spacer(), badge("v1.3")]
                     | gap(12.F) | width(sizing::fill()) | valign(align::center);
 
 
@@ -229,11 +247,37 @@ namespace
             | gap(8.F));
 
 
-        auto left
-            = column()[std::move(input_card), std::move(selection_card), std::move(scroll_card)]
-            | width(sizing::grow()) | flex(1.F) | gap(14.F);
+        auto menu_holder = column()[button("Actions", "menu_toggle") | id("menu-trigger")
+                                    | tooltip("Open the quick actions menu")]
+                         | width(sizing::fit());
+
+        if (current.menu_open)
+        {
+            auto popup  = menu() | id("gallery-menu") | placement(0.F, 40.F) | modal("menu_close");
+            popup       = popup[menu_item("Duplicate", "menu_duplicate"),
+                                menu_item("Archive", "menu_archive", true), separator(),
+                                menu_item("Delete", "menu_delete")];
+            menu_holder = menu_holder[std::move(popup)];
+        }
+
+        auto overlay_card = card(
+            column()[section_title("Tooltips, menus, and dialogs"),
+                     muted("Hover for a tooltip. Menus and dialogs trap focus; Escape cancels."),
+                     row()[std::move(menu_holder),
+                           button("Edit profile", "dialog_open", button_variant::primary)
+                               | id("dialog-trigger"),
+                           button("Toast", "toast") | id("toast-trigger")]
+                         | gap(8.F) | valign(align::center),
+                     muted(current.menu_choice.empty() ? "Menu: none"
+                                                       : "Menu: " + current.menu_choice)]
+            | gap(10.F));
+
+
+        auto left  = column()[std::move(input_card), std::move(selection_card),
+                              std::move(scroll_card), std::move(styles_card)]
+                   | width(sizing::grow()) | flex(1.F) | gap(14.F);
         auto right = column()[std::move(buttons_card), std::move(slider_card),
-                              std::move(status_card), std::move(styles_card)]
+                              std::move(overlay_card), std::move(status_card)]
                    | width(sizing::grow()) | flex(1.F) | gap(14.F);
 
 
@@ -243,11 +287,33 @@ namespace
                     | gap(12.F) | width(sizing::fill()) | valign(align::center);
 
 
-        return column()[std::move(header), separator(),
-                        row()[std::move(left), std::move(right)] | gap(16.F)
-                            | width(sizing::fill()),
-                        separator(), std::move(footer)]
-             | padding(20.F) | gap(14.F) | size(sizing::fill()) | background(0x14161A_rgb);
+        auto content
+            = column()[std::move(header), separator(),
+                       row()[std::move(left), std::move(right)] | gap(16.F) | width(sizing::fill()),
+                       separator(), std::move(footer)]
+            | padding(20.F) | gap(14.F) | size(sizing::fill());
+
+        auto root = box()[std::move(content)] | size(sizing::fill()) | background(0x14161A_rgb);
+
+        if (current.dialog_open)
+        {
+            auto dialog = column()[label("Save changes?") | text_role(font_role::heading)
+                                       | text_size(20.F) | text_color(0xF3F5F8_rgb),
+                                   muted("This dialog traps Tab focus. Escape or a scrim click "
+                                         "cancels."),
+                                   row()[button("Cancel", "dialog_cancel"), spacer(),
+                                         button("Save", "dialog_save", button_variant::primary)]
+                                       | gap(8.F) | width(sizing::fill())]
+                        | gap(12.F) | padding(18.F) | width(380.F) | background_of(tone::field)
+                        | border_of(tone::border) | align_self(align::center) | id("dialog-panel");
+
+            auto overlay = floating_box(anchor_point::center, 400) | id("dialog-overlay")
+                         | backdrop() | modal("dialog_cancel");
+            overlay      = overlay[std::move(dialog)];
+            root         = root[std::move(overlay)];
+        }
+
+        return root;
     }
 }
 
@@ -256,11 +322,13 @@ auto main() -> int
 {
     try
     {
-        return app { "Sleet widget gallery", 1040, 900 }
+        auto instance = app { "Sleet widget gallery", 1040, 1000 };
+
+        instance
             .on_boot([]() -> kei::result<std::pair<state, message>>
                      { return std::pair { state {}, message {} }; })
             .on_update(
-                [](state &current, const message &value) -> kei::result<>
+                [&instance](state &current, const message &value) -> kei::result<>
                 {
                     switch (value.type)
                     {
@@ -284,6 +352,24 @@ auto main() -> int
                         break;
                     case message::kind::volume_changed: current.volume = value.value; break;
                     case message::kind::scroll_pick:    current.picked = value.text; break;
+                    case message::kind::menu_toggle: current.menu_open = !current.menu_open; break;
+                    case message::kind::menu_close:  current.menu_open = false; break;
+                    case message::kind::menu_pick:
+                        current.menu_open   = false;
+                        current.menu_choice = value.text;
+                        break;
+                    case message::kind::dialog_open:
+                        current.dialog_open = true;
+                        current.menu_open   = false;
+                        break;
+                    case message::kind::dialog_cancel: current.dialog_open = false; break;
+                    case message::kind::dialog_save:
+                        current.dialog_open = false;
+                        instance.notify("Profile saved", 2.5F);
+                        break;
+                    case message::kind::toast:
+                        instance.notify("This is a toast notification", 3.F);
+                        break;
                     }
                     return {};
                 })
@@ -299,6 +385,13 @@ auto main() -> int
                     case event::kind::activate:
                         if (const auto result = button_action(input.action)) return result;
                         return density_action(input.action);
+
+                    case event::kind::key_down:
+                        if (input.action == "dialog_cancel")
+                            return message { message::kind::dialog_cancel };
+                        if (input.action == "menu_close")
+                            return message { message::kind::menu_close };
+                        return std::nullopt;
 
                     case event::kind::text_edit:
                         if (input.action == "name")
@@ -317,8 +410,9 @@ auto main() -> int
 
                     default: return std::nullopt;
                     }
-                })
-            .run();
+                });
+
+        return instance.run();
     }
     catch (const std::exception &failure)
     {

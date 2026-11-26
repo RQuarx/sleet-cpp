@@ -53,11 +53,24 @@ pixels from the current output size, so high-DPI windows stay sharp without
 changing application code. Resize, pixel-size, display-change, and display-scale
 events update the viewport and scale, then mark the frame dirty.
 
+Tooltips are runtime state. The deepest hovered node with `tooltip()` on itself
+or an ancestor starts a 550 ms timer; pointer motion, clicks, scrolling, and
+focus changes hide the bubble. Toasts created with `notify(text, seconds)` live
+in the runtime too, fading and sliding in, stacking bottom-right, and expiring
+without any view state.
+
 Focus, text selection, IME preedit, undo/redo stacks, open combos, scroll
 offsets, hover, press, and drag state are kept per widget id across view
 rebuilds. The runtime validates saved ids against the new tree, so stale state
 cannot survive a widget being removed or changing type. Disabled subtrees are
 skipped by focus traversal, and disabled widgets never become pointer targets.
+
+Overlays refine focus and input. A visible `modal()` node restricts hit testing
+to its subtree: clicks outside it target the modal surface, where a release or
+Escape emits its cancel action. While a modal is open, Tab and Shift+Tab cycle
+inside it and the previously focused widget is restored when the modal closes.
+`focus_scope()` traps Tab without blocking outside clicks. The last visible
+modal in paint order wins.
 
 Wheel events scroll the nearest `scrollable()` ancestor by 48 logical pixels per
 step and are also dispatched as `scroll` events with logical coordinates and

@@ -230,6 +230,45 @@ namespace sleet
         }
 
 
+        /// True when \p node is \p ancestor or one of its descendants.
+        [[nodiscard]]
+        inline auto inside_subtree(const widget::node_data &node,
+                                   const widget::node_data &ancestor) noexcept -> bool
+        {
+            for (const auto *current = &node; current != nullptr; current = current->parent)
+                if (current == &ancestor) return true;
+            return false;
+        }
+
+
+        /// Returns the topmost visible modal surface, in paint order. A modal
+        /// blocks pointer input to everything outside its subtree.
+        [[nodiscard]]
+        inline auto active_modal(const widget::node_data &root) noexcept
+            -> const widget::node_data *
+        {
+            const widget::node_data *result = nullptr;
+            auto                     stack  = std::vector<const widget::node_data *> { &root };
+
+            while (!stack.empty())
+            {
+                const auto *node = stack.back();
+                stack.pop_back();
+
+                if (!effectively_visible(*node)) continue;
+                if (node->modal) result = node;
+
+                // Push in reverse so the stack visits siblings in document
+                // order; later siblings and nested modals win, matching paint
+                // order.
+                for (auto it = node->children.rbegin(); it != node->children.rend(); ++it)
+                    stack.push_back(&*it);
+            }
+
+            return result;
+        }
+
+
         /// Returns the node's border box intersected with every clipping
         /// ancestor. The result is empty when the node is fully clipped away,
         /// hidden, or disabled by an ancestor.
@@ -291,6 +330,23 @@ namespace sleet
                              const widget::layout_result &layout,
                              math::vec2 point) noexcept -> const widget::node_data *
         {
+            // A modal limits hit testing to its own subtree. Clicks outside
+            // the modal surface still target the modal itself so a menu or
+            // dialog can dismiss itself through its action or cancel action.
+            if (const auto *modal = active_modal(root); modal != nullptr)
+            {
+                for (auto it = layout.floating.rbegin(); it != layout.floating.rend(); ++it)
+                {
+                    const auto *node = root.find(it->id);
+                    if (node == nullptr or !inside_subtree(*node, *modal)) continue;
+                    if (auto *hit = hit_test_subtree(*node, layout, point); hit != nullptr)
+                        return hit;
+                }
+
+                if (auto *hit = hit_test_subtree(*modal, layout, point); hit != nullptr) return hit;
+                return modal;
+            }
+
             // Overlays are painted last, so they are tested first, in reverse
             // paint order.
             for (auto it = layout.floating.rbegin(); it != layout.floating.rend(); ++it)
@@ -447,6 +503,32 @@ namespace sleet
         void set_reduced_motion(bool value = true) noexcept { m_reduced_motion = value; }
 
 
+        /// Shows a transient notification in the bottom-right corner. Toasts
+        /// fade in, stack upward, and disappear after \p seconds.
+        ///
+        /// Call this from an update callback (capture the application) or from
+        /// the thread that runs the event loop. It is not thread-safe.
+        void notify(std::string text, float seconds = 3.F)
+        {
+            if (text.empty()) return;
+
+            constexpr auto max_visible = std::size_t { 4 };
+            if (m_toasts.size() >= max_visible) m_toasts.pop_front();
+
+            const auto duration = std::isfinite(seconds) ? std::max(0.5F, seconds) : 3.F;
+            m_toasts.push_back({ std::move(text), 0.F, duration });
+            m_redraw_requested = true;
+        }
+
+        /// Removes every active toast immediately.
+        void clear_toasts()
+        {
+            if (m_toasts.empty()) return;
+            m_toasts.clear();
+            m_redraw_requested = true;
+        }
+
+
         auto run() -> int
         {
             if (!m_boot or !m_update or !m_view)
@@ -485,6 +567,15 @@ namespace sleet
         /// Whether SDL text input is currently enabled for the window.
         bool m_text_input_active = false;
 
+        struct toast_entry
+        {
+            std::string text;
+            float       age      = 0.F;
+            float       duration = 3.F;
+        };
+
+        std::deque<toast_entry> m_toasts;
+
         int           m_width  = 800;
         int           m_height = 600;
         widget::theme m_theme;
@@ -511,10 +602,26 @@ namespace sleet
             std::optional<widget::node_data>     tree;
             std::optional<widget::layout_result> layout;
             std::optional<widget::widget_id>     hovered;
+            std::optional<widget::widget_id>     pointer_target;
             std::optional<widget::widget_id>     pressed;
             std::optional<widget::widget_id>     focused;
             std::optional<widget::widget_id>     selecting;
             std::optional<widget::widget_id>     dragging;
+
+            /// The topmost modal for the current tree, if any. Events use this
+            /// to trap focus and route Escape to the cancel action.
+            std::optional<widget::widget_id> active_modal;
+
+            /// Focus saved when a modal captures it, restored when it closes.
+            std::optional<widget::widget_id> modal_return_focus;
+            bool                             modal_focus = false;
+
+            /// Tooltip rest timer and the anchor captured when it appears.
+            std::optional<widget::widget_id> tooltip_hover;
+            std::uint64_t                    tooltip_started = 0;
+            std::string                      tooltip_text;
+            math::rect                       tooltip_anchor;
+            bool                             tooltip_visible = false;
 
             std::unordered_map<widget::widget_id, widget::text_selection> edits;
             std::unordered_set<widget::widget_id>                         open_combos;
@@ -699,15 +806,90 @@ namespace sleet
         static void clear_pointer_state(session &current)
         {
             if (!current.hovered and !current.pressed and !current.press_active
-                and !current.selecting and !current.dragging)
+                and !current.selecting and !current.dragging and !current.pointer_target)
                 return;
 
             current.hovered.reset();
+            current.pointer_target.reset();
             current.pressed.reset();
             current.selecting.reset();
             current.dragging.reset();
             current.press_active = false;
-            current.dirty        = true;
+            current.tooltip_hover.reset();
+            hide_tooltip(current);
+            current.dirty = true;
+        }
+
+
+        static void hide_tooltip(session &current)
+        {
+            if (!current.tooltip_visible)
+            {
+                current.tooltip_text.clear();
+                return;
+            }
+
+            current.tooltip_visible = false;
+            current.tooltip_text.clear();
+            current.dirty = true;
+        }
+
+
+        /// Restarts the rest timer after pointer movement. Moving within the
+        /// same widget still counts as movement, so a tooltip only appears
+        /// once the pointer settles.
+        static void restart_tooltip(session &current)
+        {
+            hide_tooltip(current);
+            current.tooltip_hover   = current.pointer_target;
+            current.tooltip_started = SDL_GetTicks();
+        }
+
+
+        static void update_tooltip(session &current)
+        {
+            if (!current.tree or !current.layout) return;
+
+            if (!current.pointer_target)
+            {
+                current.tooltip_hover.reset();
+                hide_tooltip(current);
+                return;
+            }
+
+            if (current.tooltip_hover != current.pointer_target)
+            {
+                current.tooltip_hover   = current.pointer_target;
+                current.tooltip_started = SDL_GetTicks();
+                hide_tooltip(current);
+                return;
+            }
+
+            if (current.tooltip_visible) return;
+
+            constexpr auto delay_ms = std::uint64_t { 550 };
+            if (SDL_GetTicks() - current.tooltip_started < delay_ms) return;
+
+            const auto *node = current.tree->find(*current.pointer_target);
+            if (node == nullptr) return;
+
+            const widget::node_data *owner = nullptr;
+            for (const auto *cursor = node; cursor != nullptr; cursor = cursor->parent)
+                if (!cursor->tooltip_text.empty())
+                {
+                    owner = cursor;
+                    break;
+                }
+
+            if (owner == nullptr) return;
+
+            const auto *bounds = current.layout->find(owner->id);
+            if (bounds == nullptr) return;
+
+            current.tooltip_text    = owner->tooltip_text;
+            current.tooltip_anchor  = *bounds;
+            current.tooltip_visible = true;
+            current.dirty           = true;
         }
 
 
@@ -777,8 +959,27 @@ namespace sleet
         {
             if (!current.tree) return;
 
+            // Tab stays inside the innermost focus scope, or inside the active
+            // modal when one is open.
+            const auto *scope = &*current.tree;
+
+            if (current.active_modal)
+            {
+                if (const auto *modal = current.tree->find(*current.active_modal)) scope = modal;
+            }
+            else if (current.focused)
+            {
+                if (const auto *focused = current.tree->find(*current.focused))
+                    for (const auto *cursor = focused; cursor != nullptr; cursor = cursor->parent)
+                        if (cursor->focus_scope)
+                        {
+                            scope = cursor;
+                            break;
+                        }
+            }
+
             std::vector<const widget::node_data *> nodes;
-            collect_focusable(*current.tree, nodes);
+            collect_focusable(*scope, nodes);
 
             if (nodes.empty())
             {
@@ -801,6 +1002,68 @@ namespace sleet
                 index = (static_cast<std::size_t>(it - nodes.begin()) + 1) % nodes.size();
 
             focus_node(current, *nodes[index], true);
+        }
+
+
+        /// Moves focus into a newly opened modal, keeps it there while the
+        /// modal exists, and restores the previous focus when it closes.
+        void enforce_modal_focus(session &current, widget::node_data &root)
+        {
+            const auto *modal = _impl::active_modal(root);
+
+            if (modal == nullptr)
+            {
+                current.active_modal.reset();
+                if (!current.modal_focus) return;
+
+                current.modal_focus = false;
+
+                if (current.modal_return_focus)
+                {
+                    auto *previous = root.find(*current.modal_return_focus);
+                    if (previous != nullptr and previous->focusable
+                        and _impl::effectively_visible(*previous))
+                        focus_node(current, *previous);
+                    else
+                        current.focused.reset();
+
+                    current.modal_return_focus.reset();
+                }
+                else
+                {
+                    current.focused.reset();
+                }
+
+                current.selecting.reset();
+                current.dirty = true;
+                return;
+            }
+
+            current.active_modal = modal->id;
+
+            if (!current.modal_focus)
+            {
+                current.modal_return_focus = current.focused;
+                current.modal_focus        = true;
+            }
+
+            if (current.focused)
+                if (const auto *focused = root.find(*current.focused);
+                    focused != nullptr and _impl::inside_subtree(*focused, *modal))
+                    return;
+
+            std::vector<const widget::node_data *> nodes;
+            collect_focusable(*modal, nodes);
+
+            if (nodes.empty())
+            {
+                current.focused.reset();
+                current.selecting.reset();
+            }
+            else
+                focus_node(current, *nodes.front());
+
+            current.dirty = true;
         }
 
 
@@ -1553,6 +1816,10 @@ namespace sleet
                 // instead of dropping the combo header focus.
                 if (_impl::inside_combo_popup(hit)) return;
 
+                // Clicking a modal surface or the scrim keeps focus inside the
+                // modal until it closes and restores the saved focus.
+                if (current.active_modal) return;
+
                 if (current.focused) current.dirty = true;
                 current.focused.reset();
                 current.selecting.reset();
@@ -1688,6 +1955,10 @@ namespace sleet
 
             update_cursor(hit);
 
+            current.pointer_target
+                = hit != nullptr ? std::optional<widget::widget_id> { hit->id } : std::nullopt;
+            restart_tooltip(current);
+
             auto next_hover = visual_target(hit);
             if (current.hovered != next_hover)
             {
@@ -1709,6 +1980,12 @@ namespace sleet
             const auto *hit     = hit_at(current, native.button.x, native.button.y);
             const auto  point   = to_logical(native.button.x, native.button.y);
 
+            if (is_down)
+            {
+                hide_tooltip(current);
+                current.tooltip_hover.reset();
+            }
+
             update_cursor(hit);
 
             if (native.button.button == SDL_BUTTON_LEFT and is_down)
@@ -1726,6 +2003,12 @@ namespace sleet
 
             if (native.button.button == SDL_BUTTON_LEFT and !is_down)
                 if (!release_matches_press(current, hit)) value.action.clear();
+
+            // Clicking the modal surface itself (its padding or scrim) cancels
+            // it. Clicks on child content do not bubble into this path.
+            if (native.button.button == SDL_BUTTON_LEFT and !is_down and hit != nullptr
+                and hit->modal and hit->id == current.active_modal and !hit->cancel_action.empty())
+                value.action = hit->cancel_action;
 
             dispatch(value, current);
 
@@ -1909,6 +2192,9 @@ namespace sleet
 
         void handle_wheel(session &current, const SDL_Event &native)
         {
+            hide_tooltip(current);
+            current.tooltip_hover.reset();
+
             const auto *hit   = hit_at(current, native.wheel.mouse_x, native.wheel.mouse_y);
             auto        value = make_event(event::kind::scroll, hit);
             const auto  point = to_logical(native.wheel.mouse_x, native.wheel.mouse_y);
@@ -1943,7 +2229,29 @@ namespace sleet
         {
             if (native.type == SDL_EVENT_KEY_DOWN)
             {
+                hide_tooltip(current);
+                current.tooltip_hover.reset();
+
                 if (handle_focus_key(current, native)) return;
+
+                // Escape first closes an IME composition or an open combo,
+                // then cancels the active modal.
+                if (native.key.key == SDLK_ESCAPE and !current.preedit_id
+                    and current.open_combos.empty() and current.active_modal)
+                {
+                    if (current.tree)
+                        if (auto *modal = current.tree->find(*current.active_modal);
+                            modal != nullptr and !modal->cancel_action.empty())
+                        {
+                            auto value      = make_event(event::kind::key_down, modal);
+                            value.key       = native.key.key;
+                            value.modifiers = static_cast<std::uint16_t>(native.key.mod);
+                            value.action    = modal->cancel_action;
+                            dispatch(value, current);
+                        }
+                    return;
+                }
+
                 if (handle_control_key(current, native)) return;
             }
 
@@ -2231,6 +2539,58 @@ namespace sleet
         }
 
 
+        /// Advances toast lifetimes and reports whether any remain visible.
+        auto advance_toasts(float delta_seconds) -> bool
+        {
+            auto active = false;
+
+            for (auto it = m_toasts.begin(); it != m_toasts.end();)
+            {
+                it->age += std::max(0.F, delta_seconds);
+
+                if (it->age >= it->duration)
+                {
+                    it = m_toasts.erase(it);
+                    continue;
+                }
+
+                ++it;
+                active = true;
+            }
+
+            return active;
+        }
+
+
+        [[nodiscard]]
+        auto build_toasts() const -> std::vector<toast_message>
+        {
+            constexpr auto fade_in  = 0.16F;
+            constexpr auto fade_out = 0.30F;
+
+            auto result = std::vector<toast_message> {};
+            result.reserve(m_toasts.size());
+
+            for (const auto &toast : m_toasts)
+            {
+                auto opacity = 1.F;
+
+                if (toast.age < fade_in) opacity = toast.age / fade_in;
+
+                const auto remaining = toast.duration - toast.age;
+                if (remaining < fade_out) opacity = std::min(opacity, remaining / fade_out);
+
+                auto offset = 0.F;
+                if (!m_reduced_motion and toast.age < fade_in)
+                    offset = (1.F - (toast.age / fade_in)) * 10.F;
+
+                result.push_back({ toast.text, std::clamp(opacity, 0.F, 1.F), offset });
+            }
+
+            return result;
+        }
+
+
         template <typename Measure>
         auto refresh(session        &current,
                      render_context &context,
@@ -2251,6 +2611,7 @@ namespace sleet
             }
 
             sync_controls(current, *next_tree);
+            enforce_modal_focus(current, *next_tree);
 
             auto next_layout = calculate_layout(
                 *next_tree, measure, { static_cast<float>(m_width), static_cast<float>(m_height) });
@@ -2277,6 +2638,13 @@ namespace sleet
             context.set_pressed(current.pressed);
             context.set_interaction_progress(std::move(progress));
             context.set_scroll_metrics(current.scroll_metrics);
+
+            if (current.tooltip_visible)
+                context.set_tooltip(current.tooltip_text, current.tooltip_anchor);
+            else
+                context.clear_tooltip();
+
+            context.set_toasts(build_toasts());
 
             const auto *focused_node_ptr
                 = current.focused ? current.tree->find(*current.focused) : nullptr;
@@ -2370,6 +2738,9 @@ namespace sleet
                 const auto elapsed = static_cast<float>(now - last_tick) / 1000.F;
                 last_tick          = now;
                 const auto delta   = std::clamp(elapsed, 0.F, 0.1F);
+
+                if (advance_toasts(delta)) current.dirty = true;
+                update_tooltip(current);
 
                 if (current.dirty and !refresh(current, context, measure, delta)) return 1;
 

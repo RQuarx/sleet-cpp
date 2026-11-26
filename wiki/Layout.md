@@ -94,6 +94,11 @@ pointer input before the content underneath it. `layout_result::floating` lists
 the visible overlays in paint order as `{ id, z_index }` entries; storing ids
 instead of pointers lets a layout safely outlive its tree.
 
+A floating node with `backdrop()` ignores its intrinsic size and fills the
+parent content box, which makes it a scrim for dialogs. Its descendants then
+lay out normally inside that full-size box, so a centered panel can use
+`align_self(align::center)`.
+
 ## Scrolling and clipping
 
 `clip_children()` clips descendants to the node's border box. Clipping applies

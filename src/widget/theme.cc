@@ -115,6 +115,9 @@ auto sleet::widget::theme::default_dark() -> theme
     result.muted           = 0x8A919B_rgb;
     result.scrollbar_track = 0x2A2E35_rgb;
     result.scrollbar_thumb = 0x5A626D_rgb;
+    result.scrim           = color { 0, 0, 0, 150 };
+    result.toast_bg        = 0x2A2E35_rgb;
+    result.toast_fg        = 0xF3F5F8_rgb;
     result.disabled        = { .bg = 0x23262B_rgb, .fg = 0x6B7280_rgb };
     result.disabled_border = 0x33373D_rgb;
     result.radius          = 6.F;
@@ -144,6 +147,9 @@ auto sleet::widget::theme::default_light() -> theme
     result.muted           = 0x6B7280_rgb;
     result.scrollbar_track = 0xE5E8EC_rgb;
     result.scrollbar_thumb = 0xB6BDC6_rgb;
+    result.scrim           = color { 0, 0, 0, 90 };
+    result.toast_bg        = 0x1B1D21_rgb;
+    result.toast_fg        = 0xF3F5F8_rgb;
     result.disabled        = { .bg = 0xEDEFF2_rgb, .fg = 0x9CA3AF_rgb };
     result.disabled_border = 0xD1D5DB_rgb;
     result.radius          = 6.F;

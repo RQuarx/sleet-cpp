@@ -29,6 +29,8 @@ Built-in widgets are thin compositions of those primitives:
 | `separator()` | One-pixel horizontal rule |
 | `spacer()` | Flexible blank area |
 | `badge("text")` | Compact accent-colored label |
+| `menu_item(text, action, selected)` | Menu row with a selection marker |
+| `menu()` | Floating themed panel for a popup menu |
 
 Combo options derive their generated ids from their labels, so filtering or
 reordering a list keeps each option's identity. When the labels themselves can
@@ -91,8 +93,13 @@ box()[label("Hello")]
 | `on_click("action")` | Attach an action name for event mapping |
 | `focusable()` | Include the widget in the Tab focus order |
 | `tone_of(tone)`, `variant(button_variant)` | Resolve semantic colors from the theme |
+| `background_of(tone)`, `border_of(tone)` | Fill or outline using a theme tone |
 | `control(kind)`, `checked(bool)`, `control_value(float)`, `placeholder(text)` | Control metadata; built-in widgets set these for you |
 | `transition(seconds, curve)`, `no_transition()` | Ease hover, press, and focus feedback; `no_transition()` opts out |
+| `tooltip("text")` | Show a tooltip after the pointer rests on the node or a descendant |
+| `backdrop(bool)` | Fill the parent content box and paint the theme scrim |
+| `focus_scope(bool)` | Keep Tab traversal inside this subtree once focus enters it |
+| `modal(cancel_action)`, `on_cancel("action")` | Block input outside the subtree and map Escape or a scrim click to an action |
 
 ## Motion
 
@@ -116,6 +123,56 @@ Nodes without an explicit id receive a generated id from their kind, name, call
 site, and per-parent occurrence. The call site is part of the key, so inserting
 an unrelated sibling does not renumber existing widgets. See [[Layout]] for
 overlay and scrolling rules.
+
+## Overlays
+
+Tooltips attach with `tooltip("text")`. The runtime shows one after the pointer
+rests for 550 ms on the node or a descendant that owns the tooltip, orients it
+above or below the anchor, and hides it on movement, clicks, or scrolling.
+
+A popup menu is a floating `menu()` panel, usually built from `menu_item`
+rows. Dismiss it by making the panel modal and toggling the state from the
+mapped action:
+
+```cpp
+auto panel = menu() | placement(0.F, 40.F) | modal("menu_close");
+panel      = panel[menu_item("Duplicate", "duplicate"),
+                    menu_item("Archive", "archive", true), separator(),
+                    menu_item("Delete", "delete")];
+trigger    = trigger[std::move(panel)];
+```
+
+`modal(action)` does three things:
+
+- Blocks hit testing outside the modal subtree. Clicks that land on the modal
+  surface itself, including its padding, emit `action`; clicks on descendants
+  keep their own actions.
+- Traps focus. Tab and Shift+Tab cycle within the subtree, and the previously
+  focused widget regains focus when the modal disappears.
+- Maps Escape to `on_cancel("action")`, or to the `modal(action)` argument when
+  no explicit cancel action is set.
+
+`focus_scope()` is the lighter alternative: when focus enters the subtree, Tab
+stays inside it, but outside pointer input is not blocked.
+
+A dialog combines these pieces. Put a `backdrop()` floating box over the
+content, mark it modal, and center a panel inside it:
+
+```cpp
+auto overlay = floating_box(anchor_point::center, 400) | backdrop()
+             | modal("dialog_cancel");
+overlay = overlay[column()[label("Save changes?"),
+                           row()[button("Cancel", "dialog_cancel"),
+                                 button("Save", "dialog_save")]]];
+root = root[std::move(overlay)];
+```
+
+Toast notifications are runtime-managed rather than widget trees. Capture the
+application in `on_update` and call `notify(text, seconds)`; toasts fade and
+slide in, stack bottom-right, cap at four, and expire after the given duration
+(default 3 seconds). `notify` is not thread-safe, so call it from the event-loop
+thread or an update callback. Use `set_reduced_motion()` to snap instead of
+animating.
 
 `math::edge_insets` uses CSS order: top, right, bottom, left. The two-argument
 constructor is `(vertical, horizontal)`.

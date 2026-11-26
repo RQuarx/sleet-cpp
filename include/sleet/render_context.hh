@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include <SDL3/SDL_render.h>
 
@@ -24,6 +25,17 @@ namespace sleet
         float hover = 0.F;
         float press = 0.F;
         float focus = 0.F;
+    };
+
+
+    /// One transient notification drawn in the bottom-right corner.
+    struct toast_message
+    {
+        std::string text;
+        float       opacity = 1.F;
+
+        /// Additional downward offset in logical pixels, used for slide-in.
+        float offset = 0.F;
     };
 
 
@@ -71,6 +83,13 @@ namespace sleet
         /// Sets the scroll state used to draw scrollbars for scrollable nodes.
         void set_scroll_metrics(
             std::unordered_map<widget::widget_id, widget::scroll_metrics> metrics) noexcept;
+
+        /// Shows a tooltip bubble below \p anchor. An empty text clears it.
+        void set_tooltip(std::string text, math::rect anchor);
+        void clear_tooltip() noexcept;
+
+        /// Sets the transient notifications painted above everything else.
+        void set_toasts(std::vector<toast_message> toasts);
 
         /// Sets the widget that owns keyboard focus. Focused widgets draw a
         /// focus-colored border.

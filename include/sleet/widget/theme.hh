@@ -99,6 +99,13 @@ namespace sleet::widget
         std::optional<color> scrollbar_track;
         std::optional<color> scrollbar_thumb;
 
+        /// The dimming layer painted behind modal overlays.
+        std::optional<color> scrim;
+
+        /// The background and foreground of a toast notification.
+        std::optional<color> toast_bg;
+        std::optional<color> toast_fg;
+
         /// Colors used for disabled widgets.
         colors disabled;
 

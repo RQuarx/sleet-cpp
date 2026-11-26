@@ -62,7 +62,11 @@ node_data::node_data(const node_data &other)
       reveal_on_focus { other.reveal_on_focus }, disabled { other.disabled },
       control { other.control }, tint { other.tint }, variant { other.variant },
       focusable { other.focusable }, checked { other.checked },
-      control_value { other.control_value }, placeholder { other.placeholder }
+      control_value { other.control_value }, placeholder { other.placeholder },
+      tooltip_text { other.tooltip_text }, backdrop { other.backdrop },
+      focus_scope { other.focus_scope }, modal { other.modal },
+      cancel_action { other.cancel_action }, background_tint { other.background_tint },
+      border_tint { other.border_tint }
 { refresh_parents(true); }
 
 
@@ -80,7 +84,11 @@ node_data::node_data(node_data &&other) noexcept
       reveal_on_focus { other.reveal_on_focus }, disabled { other.disabled },
       control { other.control }, tint { other.tint }, variant { other.variant },
       focusable { other.focusable }, checked { other.checked },
-      control_value { other.control_value }, placeholder { std::move(other.placeholder) }
+      control_value { other.control_value }, placeholder { std::move(other.placeholder) },
+      tooltip_text { std::move(other.tooltip_text) }, backdrop { other.backdrop },
+      focus_scope { other.focus_scope }, modal { other.modal },
+      cancel_action { std::move(other.cancel_action) }, background_tint { other.background_tint },
+      border_tint { other.border_tint }
 { refresh_parents(true); }
 
 
@@ -125,6 +133,14 @@ auto node_data::operator=(const node_data &other) -> node_data &
     checked       = other.checked;
     control_value = other.control_value;
     placeholder   = other.placeholder;
+
+    tooltip_text    = other.tooltip_text;
+    backdrop        = other.backdrop;
+    focus_scope     = other.focus_scope;
+    modal           = other.modal;
+    cancel_action   = other.cancel_action;
+    background_tint = other.background_tint;
+    border_tint     = other.border_tint;
 
     refresh_parents(true);
     return *this;
@@ -172,6 +188,14 @@ auto node_data::operator=(node_data &&other) noexcept -> node_data &
     checked       = other.checked;
     control_value = other.control_value;
     placeholder   = std::move(other.placeholder);
+
+    tooltip_text    = std::move(other.tooltip_text);
+    backdrop        = other.backdrop;
+    focus_scope     = other.focus_scope;
+    modal           = other.modal;
+    cancel_action   = std::move(other.cancel_action);
+    background_tint = other.background_tint;
+    border_tint     = other.border_tint;
 
     refresh_parents(true);
     return *this;

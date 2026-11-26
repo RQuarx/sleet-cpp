@@ -220,4 +220,24 @@ namespace sleet::widget
     [[nodiscard]]
     auto badge(std::string text, std::source_location origin = std::source_location::current())
         -> badge_node;
+
+    /// A full-width menu row with an optional selection mark.
+    /// \param text The row label.
+    /// \param action The action reported by clicks and keyboard activation.
+    /// \param selected Shows a check mark before the label.
+    /// \param origin The source location used for diagnostics.
+    /// \return The menu row widget.
+    [[nodiscard]]
+    auto menu_item(std::string          text,
+                   std::string          action,
+                   bool                 selected = false,
+                   std::source_location origin   = std::source_location::current()) -> button_node;
+
+    /// A floating menu panel that holds \c menu_item rows. Add
+    /// \c placement() to position it and mark it \c modal() to dismiss it when
+    /// the pointer clicks outside.
+    /// \param origin The source location used for diagnostics.
+    /// \return The floating menu panel.
+    [[nodiscard]]
+    auto menu(std::source_location origin = std::source_location::current()) -> column_node;
 }

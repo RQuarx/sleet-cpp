@@ -422,6 +422,10 @@ struct sleet::render_context::impl
 
     std::unordered_map<widget::widget_id, widget::scroll_metrics> scrolls;
 
+    std::string                tooltip_text;
+    std::optional<math::rect>  tooltip_anchor;
+    std::vector<toast_message> toasts;
+
     std::optional<widget::widget_id> preedit_id;
     std::string                      preedit_text;
     std::size_t                      preedit_caret = 0;
@@ -604,6 +608,11 @@ struct sleet::render_context::impl
         if (node.control == widget::control_kind::checkbox_indicator) return theme.small_radius;
 
         if (node.control != widget::control_kind::none or !node.action.empty() or node.focusable)
+            return theme.radius;
+
+        // Themed surfaces are real panels, not tinted primitives, so they keep
+        // the control radius.
+        if (node.background_tint != widget::tone::none or node.border_tint != widget::tone::none)
             return theme.radius;
 
         // Tinted primitives (slider segments, separators, dots) are usually
@@ -974,6 +983,10 @@ struct sleet::render_context::impl
     {
         if (node.visual.background) return node.visual.background;
 
+        // A themed surface resolves its fill against the active theme so
+        // callers do not need to know concrete colors.
+        if (node.background_tint != widget::tone::none) return theme_color(node.background_tint);
+
         // A ghost button stays transparent except while hovered or pressed.
         if (node.variant == widget::button_variant::ghost)
         {
@@ -1024,18 +1037,22 @@ struct sleet::render_context::impl
 
         std::optional<color> normal;
 
-        switch (node.control)
+        if (node.border_tint != widget::tone::none) { normal = theme_color(node.border_tint); }
+        else
         {
-        case widget::control_kind::text_input:
-        case widget::control_kind::combo_box:
-        case widget::control_kind::combo_popup:        normal = theme.border; break;
-        case widget::control_kind::checkbox_indicator:
-        case widget::control_kind::radio_indicator:
-            normal = node.checked ? theme.accent : theme.border;
-            break;
-        case widget::control_kind::combo_option: break;
-        case widget::control_kind::slider:
-        case widget::control_kind::none:         break;
+            switch (node.control)
+            {
+            case widget::control_kind::text_input:
+            case widget::control_kind::combo_box:
+            case widget::control_kind::combo_popup:        normal = theme.border; break;
+            case widget::control_kind::checkbox_indicator:
+            case widget::control_kind::radio_indicator:
+                normal = node.checked ? theme.accent : theme.border;
+                break;
+            case widget::control_kind::combo_option: break;
+            case widget::control_kind::slider:
+            case widget::control_kind::none:         break;
+            }
         }
 
         if (!normal and node.variant != widget::button_variant::ghost and !node.action.empty())
@@ -1660,6 +1677,130 @@ struct sleet::render_context::impl
 
 
     [[nodiscard]]
+    auto draw_tooltip() -> kei::result<>
+    {
+        if (tooltip_text.empty() or !tooltip_anchor) return {};
+
+        auto spec = font_spec {};
+        spec.role = font_role::caption;
+        auto font = get_font_covering(spec, tooltip_text);
+        if (!font) return std::move(font.error()).unexpected();
+
+        const auto bg = theme.toast_bg.value_or(theme.field.bg.value_or(color { 0, 0, 0, 235 }));
+        const auto fg
+            = theme.toast_fg.value_or(theme.base.fg.value_or(color { 255, 255, 255, 255 }));
+        const auto border = theme.border.value_or(fg);
+
+        auto entry = get_text_texture(tooltip_text, *font, fg);
+        if (!entry) return std::move(entry.error()).unexpected();
+
+        const auto scale     = pixel_scale;
+        const auto text_size = vec2 { (*entry)->size.x / scale, (*entry)->size.y / scale };
+        const auto bubble    = vec2 { text_size.x + 16.F, text_size.y + 10.F };
+        const auto anchor    = *tooltip_anchor;
+        const auto max_x     = std::max(4.F, viewport.x - bubble.x - 4.F);
+
+        auto x = std::clamp(anchor.center().x - (bubble.x / 2.F), 4.F, max_x);
+        auto y = anchor.bottom() + 6.F;
+
+        if (y + bubble.y > viewport.y - 4.F) y = anchor.position.y - bubble.y - 6.F;
+        if (y < 4.F)
+            y = std::clamp(anchor.bottom() + 6.F, 4.F, std::max(4.F, viewport.y - bubble.y - 4.F));
+
+        const auto physical = to_physical(rect { x, y, bubble.x, bubble.y });
+        const auto radius   = 5.F * scale;
+
+        if (auto res = fill_rounded(renderer, physical, radius, bg); !res) return res;
+        if (auto res = draw_border(physical, radius, border, std::max(1.F, scale)); !res)
+            return res;
+
+        const SDL_FRect destination {
+            std::round((x + 8.F) * scale),
+            std::round((y + ((bubble.y - text_size.y) / 2.F)) * scale),
+            (*entry)->size.x,
+            (*entry)->size.y,
+        };
+
+        if (!SDL_RenderTexture(renderer, (*entry)->texture, nullptr, &destination))
+            return sleet::sdl_error { "Failed to draw the tooltip." }.unexpected();
+
+        return {};
+    }
+
+
+    [[nodiscard]]
+    auto draw_toasts() -> kei::result<>
+    {
+        if (toasts.empty()) return {};
+
+        const auto bg = theme.toast_bg.value_or(theme.field.bg.value_or(color { 0, 0, 0, 235 }));
+        const auto fg
+            = theme.toast_fg.value_or(theme.base.fg.value_or(color { 255, 255, 255, 255 }));
+        const auto accent = theme.accent.value_or(fg);
+        const auto border = theme.border.value_or(fg);
+        const auto scale  = pixel_scale;
+
+        auto y = viewport.y - 16.F;
+
+        for (auto it = toasts.rbegin(); it != toasts.rend(); ++it)
+        {
+            const auto opacity = std::clamp(it->opacity, 0.F, 1.F);
+            if (opacity <= 0.001F or it->text.empty()) continue;
+
+            auto font = get_font_covering(font_spec {}, it->text);
+            if (!font) return std::move(font.error()).unexpected();
+
+            auto entry = get_text_texture(it->text, *font, fg);
+            if (!entry) return std::move(entry.error()).unexpected();
+
+            const auto text_size = vec2 { (*entry)->size.x / scale, (*entry)->size.y / scale };
+            const auto width
+                = std::min(std::max(180.F, text_size.x + 40.F), std::max(180.F, viewport.x - 32.F));
+            const auto height = std::max(44.F, text_size.y + 20.F);
+
+            y -= height;
+
+            const auto x      = viewport.x - 16.F - width;
+            const auto draw_y = y + it->offset;
+
+            if (auto res = fill_rounded(renderer, to_physical(rect { x, draw_y, width, height }),
+                                        (6.F * scale), fade(bg, opacity));
+                !res)
+                return res;
+
+            if (auto res = fill_rounded(renderer, to_physical(rect { x, draw_y, 4.F, height }),
+                                        (2.F * scale), fade(accent, opacity));
+                !res)
+                return res;
+
+            if (auto res = draw_border(to_physical(rect { x, draw_y, width, height }),
+                                       (6.F * scale), fade(border, opacity), std::max(1.F, scale));
+                !res)
+                return res;
+
+            const SDL_FRect destination {
+                std::round((x + 18.F) * scale),
+                std::round((draw_y + ((height - text_size.y) / 2.F)) * scale),
+                (*entry)->size.x,
+                (*entry)->size.y,
+            };
+
+            (void)SDL_SetTextureAlphaMod((*entry)->texture,
+                                         static_cast<std::uint8_t>(std::lround(opacity * 255.F)));
+            const auto drawn
+                = SDL_RenderTexture(renderer, (*entry)->texture, nullptr, &destination);
+            (void)SDL_SetTextureAlphaMod((*entry)->texture, 255);
+
+            if (!drawn) return sleet::sdl_error { "Failed to draw a toast." }.unexpected();
+
+            y -= 8.F;
+        }
+
+        return {};
+    }
+
+
+    [[nodiscard]]
     auto draw_node(const node_data &node, const widget::layout_result &layout) -> kei::result<>
     {
         if (!node.visible) return {};
@@ -1674,6 +1815,10 @@ struct sleet::render_context::impl
         const auto active   = active_colors(node);
         const auto physical = to_physical(*bounds);
         const auto radius   = radius_for(node) * pixel_scale;
+
+        if (node.backdrop)
+            if (const auto scrim = theme.scrim)
+                if (auto res = fill_rounded(renderer, physical, radius, *scrim); !res) return res;
 
         if (const auto background = background_for(node, active))
             if (auto res = fill_rounded(renderer, physical, radius, *background); !res) return res;
@@ -1856,6 +2001,9 @@ auto sleet::render_context::render(const widget::node_data     &root,
             }
         }
 
+    if (result) result = m_impl->draw_tooltip();
+    if (result) result = m_impl->draw_toasts();
+
     const bool cleared = SDL_SetRenderClipRect(m_impl->renderer, nullptr);
 
     if (!result) return result;
@@ -1901,6 +2049,21 @@ void sleet::render_context::set_interaction_progress(
 void sleet::render_context::set_scroll_metrics(
     std::unordered_map<widget::widget_id, widget::scroll_metrics> metrics) noexcept
 { m_impl->scrolls = std::move(metrics); }
+
+void sleet::render_context::set_tooltip(std::string text, math::rect anchor)
+{
+    m_impl->tooltip_text   = std::move(text);
+    m_impl->tooltip_anchor = anchor;
+}
+
+void sleet::render_context::clear_tooltip() noexcept
+{
+    m_impl->tooltip_text.clear();
+    m_impl->tooltip_anchor.reset();
+}
+
+void sleet::render_context::set_toasts(std::vector<toast_message> toasts)
+{ m_impl->toasts = std::move(toasts); }
 
 void sleet::render_context::set_focused(std::optional<widget::widget_id> id) noexcept
 { m_impl->focused = std::move(id); }

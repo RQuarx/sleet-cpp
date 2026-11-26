@@ -66,7 +66,11 @@ and `disabled_border` colors. Explicit widget colors take precedence over theme
 defaults.
 
 Clipped subtrees are intersected with every `clip_children()` ancestor. Floating
-overlays are painted after all in-flow content in ascending `z_index` order.
+overlays are painted after all in-flow content in ascending `z_index` order. A
+`backdrop()` node paints the theme's `scrim` color over its full parent content
+box before drawing its children. Tooltips and toasts share the `toast_bg`,
+`toast_fg`, and `border` theme colors; both paint above every overlay so they
+stay readable over dialogs.
 Text textures are cached by font, text, and color; the cache is evicted
 least-recently-used once it reaches its fixed limit, so long sessions do not
 grow without bound.

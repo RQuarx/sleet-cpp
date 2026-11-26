@@ -412,6 +412,73 @@ namespace sleet::widget
     }
 
 
+    /// Shows a floating tooltip after the pointer rests on the widget or one
+    /// of its descendants.
+    [[nodiscard]]
+    inline auto tooltip(std::string text)
+    {
+        return _impl::make_modifier([text = std::move(text)](node_data &data)
+                                    { data.tooltip_text = text; });
+    }
+
+
+    /// Fills the parent's content box. Full-window overlays use this to cover
+    /// the window and anchor their contents.
+    [[nodiscard]]
+    inline auto backdrop(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.backdrop = value; });
+    }
+
+
+    /// Limits Tab traversal to this subtree while focus is inside it.
+    [[nodiscard]]
+    inline auto focus_scope(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.focus_scope = value; });
+    }
+
+
+    /// Marks a node as modal: focus enters it and Escape dispatches \p action.
+    [[nodiscard]]
+    inline auto modal(std::string cancel_action = {})
+    {
+        return _impl::make_modifier(
+            [action = std::move(cancel_action)](node_data &data)
+            {
+                data.modal         = true;
+                data.focus_scope   = true;
+                data.cancel_action = action;
+            });
+    }
+
+
+    /// Sets the action dispatched when Escape is pressed while the node is the
+    /// active modal.
+    [[nodiscard]]
+    inline auto on_cancel(std::string action)
+    {
+        return _impl::make_modifier([action = std::move(action)](node_data &data)
+                                    { data.cancel_action = action; });
+    }
+
+
+    /// Resolves the fill color from a theme tone.
+    [[nodiscard]]
+    inline auto background_of(tone value)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.background_tint = value; });
+    }
+
+
+    /// Resolves the border color from a theme tone.
+    [[nodiscard]]
+    inline auto border_of(tone value)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.border_tint = value; });
+    }
+
+
     /// Eases interactive feedback and explicit style changes over \p duration
     /// seconds. A zero duration makes the widget instant.
     [[nodiscard]]

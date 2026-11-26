@@ -239,3 +239,31 @@ auto sleet::widget::badge(std::string text, std::source_location origin) -> badg
     return label_node { std::move(text), origin } | padding(2.F, 8.F) | text_size(12.F)
          | tone_of(tone::accent) | radius(4.F);
 }
+
+
+auto sleet::widget::menu_item(std::string          text,
+                              std::string          action,
+                              bool                 selected,
+                              std::source_location origin) -> button_node
+{
+    auto marker = box(origin) | width(16.F) | align_self(align::center);
+    if (selected)
+        marker = marker[box(origin) | size(6.F) | tone_of(tone::accent) | radius(3.F)
+                        | align_self(align::center)];
+
+    auto row_widget
+        = row(origin)[std::move(marker), label(std::move(text), origin) | hexpand()
+                                             | text_size(14.F) | align_self(align::center)];
+
+    return box(origin)[std::move(row_widget)] | padding(6.F, 10.F) | width(sizing::fill())
+         | on_click(std::move(action)) | focusable() | variant(button_variant::ghost)
+         | transition(0.1F) | radius(4.F);
+}
+
+
+auto sleet::widget::menu(std::source_location origin) -> column_node
+{
+    return column(origin) | floating() | anchor_at(anchor_point::top_left) | stacking(200)
+         | background_of(tone::field) | border_of(tone::border) | padding(4.F) | gap(2.F)
+         | width(200.F);
+}

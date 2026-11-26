@@ -155,6 +155,31 @@ namespace sleet::widget
         /// Hint text shown by an empty text input or combo box.
         std::string placeholder;
 
+        /// Text shown in a floating tooltip after the pointer rests on the
+        /// widget or one of its descendants.
+        std::string tooltip_text;
+
+        /// Fills the parent's content box. Used by full-window overlays.
+        bool backdrop = false;
+
+        /// Limits Tab traversal to this subtree while focus is inside it.
+        bool focus_scope = false;
+
+        /// Marks this node as a modal surface. Focus moves into the topmost
+        /// visible modal, and Escape dispatches \c cancel_action.
+        bool modal = false;
+
+        /// The action dispatched when Escape is pressed inside a modal.
+        std::string cancel_action;
+
+        /// Resolves the fill color from the theme instead of an explicit
+        /// color. \c tone::none leaves the background unset.
+        tone background_tint = tone::none;
+
+        /// Resolves the border color from the theme instead of an explicit
+        /// color. \c tone::none uses the control's normal border.
+        tone border_tint = tone::none;
+
 
         node_data(std::string_view name, std::source_location origin, node_kind kind);
         node_data(const node_data &other);
