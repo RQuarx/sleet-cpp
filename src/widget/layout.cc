@@ -513,7 +513,8 @@ namespace
                                     - size_axis(child_size, m_cross)
                                     - margin_axis(child.margin, m_cross);
             const auto  cross_align
-                = child.align_self.value_or(m_node.alignment[static_cast<std::size_t>(m_cross)]);
+                = child.align_self.value_or(m_cross == axis::width ? m_node.alignment.x
+                                                                  : m_node.alignment.y);
 
             auto position = vec2 {};
             set_axis(position, m_main, cursor + leading_margin(child.margin, m_main));
