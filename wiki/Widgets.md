@@ -82,6 +82,8 @@ box()[label("Hello")]
 | `floating(bool)`, `anchor_at(anchor_point)`, `placement(x, y)`, `z_index(n)`, `stacking(n)` | Overlay positioning outside normal flow |
 | `clip(bool)`, `clip_children(bool)` | Clip descendants to this node's bounds |
 | `scrollable(bool)` | Wheel-scroll a clipped viewport |
+| `scrollbar(bool)` | Show or hide the proportional scrollbar on a scrollable node |
+| `ensure_visible(bool)` | Scroll ancestors to reveal the node when it gains focus |
 | `disabled(bool)` | Remove a subtree from focus and input; disabled widgets are not pointer targets |
 | `text_size`, `text_weight`, `text_role`, `text_color`, `text_decoration` | Text styling |
 | `background`, `foreground`, `border`, `border_width` | Visual styling |
@@ -90,6 +92,25 @@ box()[label("Hello")]
 | `focusable()` | Include the widget in the Tab focus order |
 | `tone_of(tone)`, `variant(button_variant)` | Resolve semantic colors from the theme |
 | `control(kind)`, `checked(bool)`, `control_value(float)`, `placeholder(text)` | Control metadata; built-in widgets set these for you |
+| `transition(seconds, curve)`, `no_transition()` | Ease hover, press, and focus feedback; `no_transition()` opts out |
+
+## Motion
+
+Interactive widgets ease hover, press, and focus feedback over 120 ms by
+default. Override the duration or curve per node:
+
+```cpp
+button("Save", "save") | transition(0.2F, easing::ease_in_out);
+box()[...] | no_transition();
+```
+
+`easing` provides `linear`, `ease_in`, `ease_out`, `ease_in_out`, and
+`ease_out_back`. The runtime animates the scalar state and the renderer blends
+colors and focus borders by the eased amount instead of switching instantly.
+Transitions snap when no progress map is supplied, so layout tests and static
+rendering stay deterministic. Call `application::set_reduced_motion()` to
+disable easing for accessibility; transitions and smooth scrolling then snap to
+their targets.
 
 Nodes without an explicit id receive a generated id from their kind, name, call
 site, and per-parent occurrence. The call site is part of the key, so inserting

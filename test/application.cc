@@ -629,53 +629,127 @@ const boost::ut::suite application_tests = []
         auto observed = state {};
         auto frame    = 0;
 
-        auto result
-            = app { "sleet-scroll-test", 320, 240, std::move(theme) }
-                  .on_boot([]() -> kei::result<std::pair<state, message>>
-                           { return std::pair { state {}, message {} }; })
-                  .on_update(
-                      [](state &current, const message &value) -> kei::result<>
-                      {
-                          if (value.action == "hit") current.hits++;
-                          return {};
-                      })
-                  .on_view(
-                      [&observed](const state &current)
-                      {
-                          observed = current;
-                          return column()[column()[box() | width(200.F) | height(100.F),
-                                                   button("Hit", "hit") | width(200.F)
-                                                       | height(20.F)]
-                                          | width(200.F) | height(60.F) | scrollable()]
-                               | width(200.F) | height(200.F);
-                      })
-                  .on_event(
-                      [](const sleet::event &input) -> std::optional<message>
-                      {
-                          if (input.type == sleet::event::kind::mouse_up and input.action == "hit")
-                              return message { "hit" };
-                          return std::nullopt;
-                      })
-                  .on_subscription(
-                      [&frame]() -> std::optional<message>
-                      {
-                          switch (++frame)
-                          {
-                          case 1: push_wheel(50.F, 20.F, 0.F, -1.F); break;
-                          case 2:
-                              push_mouse(true, 50.F, 55.F);
-                              push_mouse(false, 50.F, 55.F);
-                              break;
-                          case 3:  push_quit(); break;
-                          default: break;
-                          }
+        auto instance = app { "sleet-scroll-test", 320, 240, std::move(theme) };
+        instance
+            .on_boot([]() -> kei::result<std::pair<state, message>>
+                     { return std::pair { state {}, message {} }; })
+            .on_update(
+                [](state &current, const message &value) -> kei::result<>
+                {
+                    if (value.action == "hit") current.hits++;
+                    return {};
+                })
+            .on_view(
+                [&observed](const state &current)
+                {
+                    observed = current;
+                    return column()[column()[box() | width(200.F) | height(100.F),
+                                             button("Hit", "hit") | width(200.F) | height(20.F)]
+                                    | width(200.F) | height(60.F) | scrollable()]
+                         | width(200.F) | height(200.F);
+                })
+            .on_event(
+                [](const sleet::event &input) -> std::optional<message>
+                {
+                    if (input.type == sleet::event::kind::mouse_up and input.action == "hit")
+                        return message { "hit" };
+                    return std::nullopt;
+                })
+            .on_subscription(
+                [&frame]() -> std::optional<message>
+                {
+                    switch (++frame)
+                    {
+                    case 1: push_wheel(50.F, 20.F, 0.F, -1.F); break;
+                    case 2:
+                        push_mouse(true, 50.F, 55.F);
+                        push_mouse(false, 50.F, 55.F);
+                        break;
+                    case 3:  push_quit(); break;
+                    default: break;
+                    }
 
-                          return std::nullopt;
-                      })
-                  .run();
+                    return std::nullopt;
+                });
+
+        // Snap scrolling so the click lands on a deterministic frame.
+        instance.set_reduced_motion();
+
+        const auto result = instance.run();
 
         expect(eq(result, 0));
         expect(eq(observed.hits, 1));
+    };
+
+    "focus reveals an off-screen row inside a scroll viewport"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        { std::string hit; };
+
+        struct message
+        { std::string action; };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto instance = app { "sleet-reveal-test", 200, 60, std::move(theme) };
+        instance
+            .on_boot([]() -> kei::result<std::pair<state, message>>
+                     { return std::pair { state {}, message {} }; })
+            .on_update(
+                [](state &current, const message &value) -> kei::result<>
+                {
+                    current.hit = value.action;
+                    return {};
+                })
+            .on_view(
+                [&observed](const state &current)
+                {
+                    observed = current;
+                    return column()[button("One", "one") | width(200.F) | height(36.F),
+                                    button("Two", "two") | width(200.F) | height(36.F),
+                                    button("Three", "three") | width(200.F) | height(36.F)]
+                         | id("viewport") | width(200.F) | height(60.F) | clip() | scrollable();
+                })
+            .on_event(
+                [](const sleet::event &input) -> std::optional<message>
+                {
+                    if (input.type == sleet::event::kind::mouse_up and !input.action.empty())
+                        return message { input.action };
+                    return std::nullopt;
+                })
+            .on_subscription(
+                [&frame]() -> std::optional<message>
+                {
+                    switch (++frame)
+                    {
+                    case 1: push_key(SDLK_TAB); break;
+                    case 2: push_key(SDLK_TAB); break;
+                    case 3: push_key(SDLK_TAB); break;
+                    case 4:
+                        push_mouse(true, 100.F, 40.F);
+                        push_mouse(false, 100.F, 40.F);
+                        break;
+                    case 5:  push_quit(); break;
+                    default: break;
+                    }
+
+                    return std::nullopt;
+                });
+
+        instance.set_reduced_motion();
+
+        const auto result = instance.run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.hit, std::string { "three" }));
     };
 
     "combo box Home and End focus the first and last options"_test = []

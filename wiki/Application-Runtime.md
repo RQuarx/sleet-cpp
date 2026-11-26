@@ -59,11 +59,15 @@ rebuilds. The runtime validates saved ids against the new tree, so stale state
 cannot survive a widget being removed or changing type. Disabled subtrees are
 skipped by focus traversal, and disabled widgets never become pointer targets.
 
-Wheel events scroll the nearest `scrollable()` ancestor and are also dispatched
-as `scroll` events with logical coordinates and deltas. Scroll offsets are
-clamped to the measured content after each layout and applied by translating the
-subtree, so hit testing and painting use the same coordinates. Nested scroll
-containers are resolved bottom-up.
+Wheel events scroll the nearest `scrollable()` ancestor by 48 logical pixels per
+step and are also dispatched as `scroll` events with logical coordinates and
+deltas. The runtime moves 40% of the step immediately and eases the remainder,
+so input feels responsive without jumping. Offsets are clamped to the measured
+content after each layout and applied by translating the subtree, so hit testing
+and painting use the same coordinates. Nested scroll containers are resolved
+bottom-up. When focus moves, scrollable ancestors reveal the focused widget
+unless it opts out with `ensure_visible(false)`. `set_reduced_motion()` snaps
+scrolling and control transitions to their targets.
 
 Text input supports platform IME composition. `SDL_EVENT_TEXT_EDITING` updates
 the preedit shown in the focused field, and `SDL_EVENT_TEXT_INPUT` commits the

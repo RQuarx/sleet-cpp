@@ -522,6 +522,12 @@ namespace sleet
             /// Wheel offsets, clamped to the measured content after layout.
             std::unordered_map<widget::widget_id, math::vec2> scrolls;
 
+            /// Desired wheel offsets. The visible offset eases toward these.
+            std::unordered_map<widget::widget_id, math::vec2> scroll_targets;
+
+            /// Scrollbar state for the most recent layout.
+            std::unordered_map<widget::widget_id, widget::scroll_metrics> scroll_metrics;
+
             std::unordered_map<widget::widget_id, std::vector<edit_snapshot>> undo;
             std::unordered_map<widget::widget_id, std::vector<edit_snapshot>> redo;
 
@@ -543,6 +549,7 @@ namespace sleet
 
             bool press_active   = false;
             bool focus_visible  = false;
+            bool reveal_focus   = false;
             bool quit_requested = false;
             bool dirty          = true;
         };
@@ -762,6 +769,7 @@ namespace sleet
             }
 
             current.focus_visible = keyboard;
+            current.reveal_focus  = true;
         }
 
 
@@ -868,6 +876,15 @@ namespace sleet
                 const auto *node = root.find(it->first);
                 if (node == nullptr or !node->scrollable)
                     it = current.scrolls.erase(it);
+                else
+                    ++it;
+            }
+
+            for (auto it = current.scroll_targets.begin(); it != current.scroll_targets.end();)
+            {
+                const auto *node = root.find(it->first);
+                if (node == nullptr or !node->scrollable)
+                    it = current.scroll_targets.erase(it);
                 else
                     ++it;
             }
@@ -1776,28 +1793,82 @@ namespace sleet
         }
 
 
+        /// Scrolls the focused widget into view inside its scrollable
+        /// ancestors. Only runs after a focus change so wheel scrolling is not
+        /// immediately undone.
+        void ensure_visible(session &current, const widget::layout_result &layout)
+        {
+            if (!current.reveal_focus) return;
+            current.reveal_focus = false;
+
+            if (!current.focused or !current.tree) return;
+
+            const auto *focused = current.tree->find(*current.focused);
+            if (focused == nullptr or !focused->reveal_on_focus) return;
+
+            const auto *target = layout.find(focused->id);
+            if (target == nullptr) return;
+
+            for (auto *ancestor = focused->parent; ancestor != nullptr; ancestor = ancestor->parent)
+            {
+                if (!ancestor->scrollable) continue;
+
+                const auto *viewport = layout.find(ancestor->id);
+                if (viewport == nullptr) continue;
+
+                auto &offset = current.scroll_targets[ancestor->id];
+
+                const auto left   = viewport->position.x + ancestor->padding.left;
+                const auto top    = viewport->position.y + ancestor->padding.top;
+                const auto right  = viewport->right() - ancestor->padding.right;
+                const auto bottom = viewport->bottom() - ancestor->padding.bottom;
+
+                if (target->position.x < left + offset.x)
+                    offset.x = target->position.x - left;
+                else if (target->right() > right + offset.x)
+                    offset.x = target->right() - right;
+
+                if (target->position.y < top + offset.y)
+                    offset.y = target->position.y - top;
+                else if (target->bottom() > bottom + offset.y)
+                    offset.y = target->bottom() - bottom;
+
+                offset.x = std::max(0.F, offset.x);
+                offset.y = std::max(0.F, offset.y);
+            }
+        }
+
+
         /// Applies the stored wheel offsets to a freshly calculated layout.
         /// Nested scroll containers are resolved bottom-up so an outer viewport
         /// also moves the already-panned inner content.
-        static void apply_scroll_offsets(session                 &current,
-                                         const widget::node_data &node,
-                                         widget::layout_result   &layout)
+        auto apply_scroll_offsets(session                 &current,
+                                  const widget::node_data &node,
+                                  widget::layout_result   &layout,
+                                  float                    delta_seconds) -> bool
         {
-            for (const auto &child : node.children) apply_scroll_offsets(current, child, layout);
+            auto active = false;
 
-            if (!node.scrollable) return;
+            for (const auto &child : node.children)
+                active |= apply_scroll_offsets(current, child, layout, delta_seconds);
+
+            if (!node.scrollable) return active;
 
             const auto *bounds = layout.find(node.id);
-            if (bounds == nullptr) return;
+            if (bounds == nullptr) return active;
 
             auto content = std::optional<math::rect> {};
             accumulate_content(node, layout, content);
 
             auto &offset = current.scrolls[node.id];
+            auto &target = current.scroll_targets[node.id];
+
             if (!content)
             {
                 offset = {};
-                return;
+                target = {};
+                current.scroll_metrics.erase(node.id);
+                return active;
             }
 
             const auto content_right  = bounds->right() - node.padding.right;
@@ -1805,11 +1876,34 @@ namespace sleet
             const auto max_x          = std::max(0.F, content->right() - content_right);
             const auto max_y          = std::max(0.F, content->bottom() - content_bottom);
 
+            target.x = std::clamp(target.x, 0.F, max_x);
+            target.y = std::clamp(target.y, 0.F, max_y);
+
+            if (m_reduced_motion or delta_seconds <= 0.F) { offset = target; }
+            else
+            {
+                const auto factor = 1.F - std::exp(-delta_seconds * 24.F);
+                offset           += (target - offset) * factor;
+
+                if (std::abs(target.x - offset.x) < 0.25F) offset.x = target.x;
+                if (std::abs(target.y - offset.y) < 0.25F) offset.y = target.y;
+            }
+
             offset.x = std::clamp(offset.x, 0.F, max_x);
             offset.y = std::clamp(offset.y, 0.F, max_y);
 
+            current.scroll_metrics[node.id] = {
+                offset,
+                { max_x, max_y },
+                { std::max(0.F, bounds->size.x - node.padding.left - node.padding.right),
+                  std::max(0.F, bounds->size.y - node.padding.top - node.padding.bottom) },
+            };
+
             if (offset.x != 0.F or offset.y != 0.F)
                 translate_subtree(node, layout, { -offset.x, -offset.y });
+
+            active |= offset.x != target.x or offset.y != target.y;
+            return active;
         }
 
 
@@ -1825,9 +1919,19 @@ namespace sleet
 
             if (const auto *scroller = scroll_target(hit); scroller != nullptr)
             {
-                auto &offset  = current.scrolls[scroller->id];
-                offset.x     -= native.wheel.x * 48.F;
-                offset.y     -= native.wheel.y * 48.F;
+                const auto dx = -native.wheel.x * 48.F;
+                const auto dy = -native.wheel.y * 48.F;
+
+                auto &target = current.scroll_targets[scroller->id];
+                target.x    += dx;
+                target.y    += dy;
+
+                // Move part of the way immediately so wheel input feels
+                // responsive, then ease the remainder on later frames.
+                auto &offset = current.scrolls[scroller->id];
+                offset.x    += dx * 0.4F;
+                offset.y    += dy * 0.4F;
+
                 current.dirty = true;
             }
 
@@ -2049,8 +2153,8 @@ namespace sleet
         {
             output.clear();
 
-            // A state applies to the target and all of its ancestors, matching
-            // the renderer's inherited hover and press feedback.
+            // Hover and press apply to the target and its ancestors, matching
+            // the renderer's inherited feedback for action widgets.
             const auto mark =
                 [&](const std::optional<widget::widget_id> &id, float interaction_progress::*member)
             {
@@ -2068,7 +2172,9 @@ namespace sleet
             const auto  show_focus
                 = focused != nullptr
                && (current.focus_visible or focused->control == widget::control_kind::text_input);
-            if (show_focus) mark(current.focused, &interaction_progress::focus);
+
+            // Focus is drawn only on the focused widget, never its ancestors.
+            if (show_focus) output[focused->id].focus = 1.F;
 
             auto active = false;
 
@@ -2157,7 +2263,10 @@ namespace sleet
             current.tree   = std::move(*next_tree);
             current.layout = std::move(*next_layout);
 
-            apply_scroll_offsets(current, *current.tree, *current.layout);
+            current.scroll_metrics.clear();
+            ensure_visible(current, *current.layout);
+            const auto scrolling
+                = apply_scroll_offsets(current, *current.tree, *current.layout, delta_seconds);
             sync_text_input(current);
 
             auto       progress = std::unordered_map<widget::widget_id, interaction_progress> {};
@@ -2167,6 +2276,7 @@ namespace sleet
             context.set_hovered(current.hovered);
             context.set_pressed(current.pressed);
             context.set_interaction_progress(std::move(progress));
+            context.set_scroll_metrics(current.scroll_metrics);
 
             const auto *focused_node_ptr
                 = current.focused ? current.tree->find(*current.focused) : nullptr;
@@ -2209,7 +2319,7 @@ namespace sleet
                 return false;
             }
 
-            current.dirty = animating;
+            current.dirty = animating or scrolling;
             return true;
         }
 

@@ -55,6 +55,10 @@ progress fills resolve their colors from the control kind and semantic tone.
 Sliders are drawn from their control value as a rounded track, an accent fill,
 and a centered thumb; focus rings the thumb instead of the whole row, and
 disabled sliders mute all three parts.
+Hover, press, and focus amounts are eased by the runtime, and the renderer
+blends backgrounds, borders, and focus rings by the current progress instead of
+switching states. Scrollable viewports draw a six-pixel proportional scrollbar
+using the theme's `scrollbar_track` and `scrollbar_thumb` colors.
 Hover and press colors apply to action widgets and propagate to their
 descendants, so a label inside a button inherits the button's state foreground
 unless it sets an explicit color. Disabled widgets use the theme's `disabled`

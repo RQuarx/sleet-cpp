@@ -127,6 +127,12 @@ namespace sleet::widget
         /// with \c clip_children and a fixed size to build a scroll viewport.
         bool scrollable = false;
 
+        /// Draws a proportional scrollbar for a scrollable node.
+        bool show_scrollbar = true;
+
+        /// Scrolls the nearest scrollable ancestors when this node gains focus.
+        bool reveal_on_focus = true;
+
         /// Disabled widgets stay visible but ignore pointer and keyboard input.
         bool disabled = false;
 

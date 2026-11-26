@@ -16,7 +16,10 @@ the window, renderer, and event loop.
 - Flexbox-style layout with `fit`, `grow`, `fill`, and `fixed` sizing, plus
   margins, padding, gaps, alignment, justification, and per-child flex weights.
 - Floating overlays (`floating_box`, `anchor_at`, `placement`, `z_index`),
-  clipping, and wheel-scrollable viewports.
+  clipping, wheel-scrollable viewports with proportional scrollbars, smooth
+  wheel easing, and focus-reveal scrolling.
+- Eased hover, press, and focus transitions with configurable curves and a
+  reduced-motion mode.
 - Stable generated widget ids derived from the call site, with explicit `id` or
   `key` overrides.
 - Text is measured at its intrinsic size and wrapped using Unicode line-break

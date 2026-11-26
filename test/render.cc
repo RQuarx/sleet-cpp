@@ -250,6 +250,52 @@ const boost::ut::suite render_tests = []
                 context.set_interaction_progress({});
             }
 
+            // Scrollable viewports paint a proportional scrollbar above their
+            // content.
+            context.set_viewport({ 64.F, 64.F });
+
+            auto scroll_tree
+                = to_data(column()[box() | width(64.F) | height(200.F) | background(0x303030_rgb)]
+                          | id("scroll") | size(64.F, 64.F) | clip() | scrollable());
+            expect(static_cast<bool>(scroll_tree.finalize()));
+
+            auto scroll_layout = calculate_layout(scroll_tree, measure, { 64.F, 64.F });
+            expect(static_cast<bool>(scroll_layout));
+            if (scroll_layout)
+            {
+                context.set_scroll_metrics({
+                    { widget_id { "scroll" }, scroll_metrics { .offset   = { 0.F, 50.F },
+                                                               .max      = { 0.F, 100.F },
+                                                               .viewport = { 64.F, 64.F } } }
+                });
+
+                expect(static_cast<bool>(context.render(scroll_tree, *scroll_layout)));
+
+                auto *pixels = SDL_RenderReadPixels(renderer, nullptr);
+                expect(pixels != nullptr);
+                if (pixels != nullptr)
+                {
+                    const auto sample = [pixels](int x, int y)
+                    {
+                        std::uint8_t r = 0;
+                        std::uint8_t g = 0;
+                        std::uint8_t b = 0;
+                        std::uint8_t a = 0;
+                        expect(SDL_ReadSurfacePixel(pixels, x, y, &r, &g, &b, &a));
+                        return sleet::color { r, g, b, a };
+                    };
+
+                    const auto track = sample(59, 5);
+                    const auto thumb = sample(59, 30);
+
+                    expect(track == 0x2A2E35_rgb);
+                    expect(thumb == 0x5A626D_rgb);
+                    SDL_DestroySurface(pixels);
+                }
+
+                context.set_scroll_metrics({});
+            }
+
             // Floating content is painted above normal flow, even when it
             // extends past its parent's bounds.
             context.set_viewport({ 64.F, 64.F });

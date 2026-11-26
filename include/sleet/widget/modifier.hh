@@ -344,6 +344,22 @@ namespace sleet::widget
     }
 
 
+    /// Shows or hides the proportional scrollbar for a scrollable node.
+    [[nodiscard]]
+    inline auto scrollbar(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.show_scrollbar = value; });
+    }
+
+
+    /// Scrolls the nearest scrollable ancestors when this node gains focus.
+    [[nodiscard]]
+    inline auto ensure_visible(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.reveal_on_focus = value; });
+    }
+
+
     [[nodiscard]]
     inline auto disabled(bool value = true)
     {

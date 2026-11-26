@@ -11,6 +11,7 @@
 #include "sleet/math/vec2.hh"
 #include "sleet/widget/control.hh"
 #include "sleet/widget/layout.hh"
+#include "sleet/widget/scroll.hh"
 #include "sleet/widget/theme.hh"
 
 
@@ -66,6 +67,10 @@ namespace sleet
         /// switching instantly.
         void set_interaction_progress(
             std::unordered_map<widget::widget_id, interaction_progress> progress) noexcept;
+
+        /// Sets the scroll state used to draw scrollbars for scrollable nodes.
+        void set_scroll_metrics(
+            std::unordered_map<widget::widget_id, widget::scroll_metrics> metrics) noexcept;
 
         /// Sets the widget that owns keyboard focus. Focused widgets draw a
         /// focus-colored border.

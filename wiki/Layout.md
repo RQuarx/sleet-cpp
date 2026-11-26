@@ -100,17 +100,24 @@ instead of pointers lets a layout safely outlive its tree.
 to both rendering and hit testing: a child outside every clipping ancestor's
 bounds is neither drawn nor clickable.
 
-`scrollable()` makes a node respond to wheel events. The runtime keeps a scroll
-offset per widget, applies it after layout by translating the subtree, and
-clamps it to the measured content bounds. Nested scroll containers are resolved
-bottom-up, so an outer viewport also moves already-panned inner content. The
-layout pass itself is always unscrolled; scrolling is runtime state, like focus
-and text selection.
+`scrollable()` makes a node respond to wheel events. Each wheel step requests
+48 logical pixels; the runtime moves part of the distance immediately and eases
+the rest over a few frames. The offset is clamped to the measured content bounds
+and applied after layout by translating the subtree. Nested scroll containers
+are resolved bottom-up, so an outer viewport also moves already-panned inner
+content. The layout pass itself is always unscrolled; scrolling is runtime
+state, like focus and text selection.
+
+`scrollbar()` controls the proportional thumb drawn along the right or bottom
+edge when content overflows. `ensure_visible()` scrolls the scrollable
+ancestors when a widget gains focus; it is enabled by default and can be turned
+off per widget. `application::set_reduced_motion()` makes wheel and focus
+scrolling snap instead of easing.
 
 A typical scroll viewport combines both modifiers:
 
 ```cpp
-column()[rows...] | height(240.F) | clip() | scrollable();
+column()[rows...] | height(240.F) | clip() | scrollable() | scrollbar();
 ```
 
 See [[Application-Runtime]] for wheel dispatch and [[Rendering-and-Themes]] for

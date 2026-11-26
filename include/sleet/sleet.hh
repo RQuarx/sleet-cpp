@@ -19,6 +19,7 @@
 #include "sleet/widget/layout.hh"
 #include "sleet/widget/modifier.hh"
 #include "sleet/widget/node.hh"
+#include "sleet/widget/scroll.hh"
 #include "sleet/widget/style.hh"
 #include "sleet/widget/theme.hh"
 #include "sleet/widgets.hh"

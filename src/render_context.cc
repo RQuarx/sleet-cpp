@@ -420,6 +420,8 @@ struct sleet::render_context::impl
     std::unordered_map<widget::widget_id, interaction_progress> progress;
     bool                                                        has_progress = false;
 
+    std::unordered_map<widget::widget_id, widget::scroll_metrics> scrolls;
+
     std::optional<widget::widget_id> preedit_id;
     std::string                      preedit_text;
     std::size_t                      preedit_caret = 0;
@@ -531,16 +533,30 @@ struct sleet::render_context::impl
     [[nodiscard]]
     auto amounts_for(const node_data &node) const noexcept -> interaction_progress
     {
-        if (has_progress)
+        if (!has_progress)
         {
-            const auto it = progress.find(node.id);
-            return it == progress.end() ? interaction_progress {} : it->second;
+            interaction_progress result;
+            if (is_hovered(node)) result.hover = 1.F;
+            if (is_pressed(node)) result.press = 1.F;
+            if (focused and *focused == node.id) result.focus = 1.F;
+            return result;
         }
 
+        // Hover and press propagate from an action widget to its descendants,
+        // so merge the node's own progress with its ancestors'. Focus stays
+        // local to the focused widget.
         interaction_progress result;
-        if (is_hovered(node)) result.hover = 1.F;
-        if (is_pressed(node)) result.press = 1.F;
-        if (focused and *focused == node.id) result.focus = 1.F;
+        if (const auto it = progress.find(node.id); it != progress.end()) result = it->second;
+
+        for (const auto *cursor = node.parent; cursor != nullptr; cursor = cursor->parent)
+        {
+            const auto it = progress.find(cursor->id);
+            if (it == progress.end()) continue;
+
+            result.hover = std::max(result.hover, it->second.hover);
+            result.press = std::max(result.press, it->second.press);
+        }
+
         return result;
     }
 
@@ -1557,6 +1573,93 @@ struct sleet::render_context::impl
 
 
     [[nodiscard]]
+    auto draw_scrollbars(const node_data &node, const rect &bounds) -> kei::result<>
+    {
+        if (!node.scrollable or !node.show_scrollbar) return {};
+
+        const auto it = scrolls.find(node.id);
+        if (it == scrolls.end()) return {};
+
+        const auto &metrics = it->second;
+        if (metrics.max.x <= 0.F and metrics.max.y <= 0.F) return {};
+
+        const auto physical  = to_physical(bounds);
+        const auto scale     = pixel_scale;
+        const auto thickness = 6.F * scale;
+        const auto inset     = 2.F * scale;
+
+        if (physical.size.x <= thickness or physical.size.y <= thickness) return {};
+
+        const auto track_color
+            = theme.scrollbar_track.value_or(theme.field.bg.value_or(color { 0, 0, 0, 120 }));
+        const auto thumb_color
+            = theme.scrollbar_thumb.value_or(theme.border.value_or(color { 255, 255, 255, 90 }));
+
+        const auto vertical   = metrics.max.y > 0.5F;
+        const auto horizontal = metrics.max.x > 0.5F;
+
+        if (vertical)
+        {
+            const auto track = rect {
+                physical.right() - inset - thickness,
+                physical.position.y + inset,
+                thickness,
+                physical.size.y - (2.F * inset),
+            };
+
+            if (track.size.y > 0.F)
+            {
+                if (auto res = fill_rounded(renderer, track, thickness / 2.F, track_color); !res)
+                    return res;
+
+                const auto thumb = widget::scrollbar_thumb_geometry(
+                    track.size.y, track.size.y + (metrics.max.y * scale), metrics.offset.y * scale,
+                    24.F * scale);
+
+                if (thumb.length > 0.F)
+                    if (auto res
+                        = fill_rounded(renderer,
+                                       rect { track.position.x, track.position.y + thumb.start,
+                                              thickness, thumb.length },
+                                       thickness / 2.F, thumb_color);
+                        !res)
+                        return res;
+            }
+        }
+
+        if (horizontal)
+        {
+            const auto track = rect {
+                physical.position.x + inset,
+                physical.bottom() - inset - thickness,
+                physical.size.x - (2.F * inset) - (vertical ? thickness + inset : 0.F),
+                thickness,
+            };
+
+            if (track.size.x > 0.F)
+            {
+                if (auto res = fill_rounded(renderer, track, thickness / 2.F, track_color); !res)
+                    return res;
+
+                const auto thumb = widget::scrollbar_thumb_geometry(
+                    track.size.x, track.size.x + (metrics.max.x * scale), metrics.offset.x * scale,
+                    24.F * scale);
+
+                if (thumb.length > 0.F)
+                    if (auto res = fill_rounded(renderer,
+                                                rect { track.position.x + thumb.start,
+                                                       track.position.y, thumb.length, thickness },
+                                                thickness / 2.F, thumb_color);
+                        !res)
+                        return res;
+            }
+        }
+
+        return {};
+    }
+
+
+    [[nodiscard]]
     auto draw_node(const node_data &node, const widget::layout_result &layout) -> kei::result<>
     {
         if (!node.visible) return {};
@@ -1608,6 +1711,12 @@ struct sleet::render_context::impl
                 if (clip) (void)leave_text_clip(*clip);
                 return std::move(result.error()).unexpected();
             }
+        }
+
+        if (auto res = draw_scrollbars(node, *bounds); !res)
+        {
+            if (clip) (void)leave_text_clip(*clip);
+            return res;
         }
 
         if (clip)
@@ -1788,6 +1897,10 @@ void sleet::render_context::set_interaction_progress(
     m_impl->progress     = std::move(progress);
     m_impl->has_progress = true;
 }
+
+void sleet::render_context::set_scroll_metrics(
+    std::unordered_map<widget::widget_id, widget::scroll_metrics> metrics) noexcept
+{ m_impl->scrolls = std::move(metrics); }
 
 void sleet::render_context::set_focused(std::optional<widget::widget_id> id) noexcept
 { m_impl->focused = std::move(id); }

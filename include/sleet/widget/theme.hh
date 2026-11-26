@@ -95,6 +95,10 @@ namespace sleet::widget
         /// The color for placeholders and secondary text.
         std::optional<color> muted;
 
+        /// The scrollbar groove and thumb colors.
+        std::optional<color> scrollbar_track;
+        std::optional<color> scrollbar_thumb;
+
         /// Colors used for disabled widgets.
         colors disabled;
 

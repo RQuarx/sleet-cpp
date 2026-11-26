@@ -58,10 +58,11 @@ node_data::node_data(const node_data &other)
       motion { other.motion }, floating { other.floating },
       placement_anchor { other.placement_anchor }, placement { other.placement },
       z_index { other.z_index }, clip_children { other.clip_children },
-      scrollable { other.scrollable }, disabled { other.disabled }, control { other.control },
-      tint { other.tint }, variant { other.variant }, focusable { other.focusable },
-      checked { other.checked }, control_value { other.control_value },
-      placeholder { other.placeholder }
+      scrollable { other.scrollable }, show_scrollbar { other.show_scrollbar },
+      reveal_on_focus { other.reveal_on_focus }, disabled { other.disabled },
+      control { other.control }, tint { other.tint }, variant { other.variant },
+      focusable { other.focusable }, checked { other.checked },
+      control_value { other.control_value }, placeholder { other.placeholder }
 { refresh_parents(true); }
 
 
@@ -75,10 +76,11 @@ node_data::node_data(node_data &&other) noexcept
       motion { other.motion }, floating { other.floating },
       placement_anchor { other.placement_anchor }, placement { other.placement },
       z_index { other.z_index }, clip_children { other.clip_children },
-      scrollable { other.scrollable }, disabled { other.disabled }, control { other.control },
-      tint { other.tint }, variant { other.variant }, focusable { other.focusable },
-      checked { other.checked }, control_value { other.control_value },
-      placeholder { std::move(other.placeholder) }
+      scrollable { other.scrollable }, show_scrollbar { other.show_scrollbar },
+      reveal_on_focus { other.reveal_on_focus }, disabled { other.disabled },
+      control { other.control }, tint { other.tint }, variant { other.variant },
+      focusable { other.focusable }, checked { other.checked },
+      control_value { other.control_value }, placeholder { std::move(other.placeholder) }
 { refresh_parents(true); }
 
 
@@ -112,6 +114,8 @@ auto node_data::operator=(const node_data &other) -> node_data &
     z_index          = other.z_index;
     clip_children    = other.clip_children;
     scrollable       = other.scrollable;
+    show_scrollbar   = other.show_scrollbar;
+    reveal_on_focus  = other.reveal_on_focus;
     disabled         = other.disabled;
 
     control       = other.control;
@@ -157,6 +161,8 @@ auto node_data::operator=(node_data &&other) noexcept -> node_data &
     z_index          = other.z_index;
     clip_children    = other.clip_children;
     scrollable       = other.scrollable;
+    show_scrollbar   = other.show_scrollbar;
+    reveal_on_focus  = other.reveal_on_focus;
     disabled         = other.disabled;
 
     control       = other.control;

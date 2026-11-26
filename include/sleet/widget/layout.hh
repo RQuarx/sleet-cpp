@@ -8,6 +8,7 @@
 #include "sleet/math/rect.hh"
 #include "sleet/math/vec2.hh"
 #include "sleet/widget/node.hh"
+#include "sleet/widget/scroll.hh"
 
 
 namespace sleet::widget

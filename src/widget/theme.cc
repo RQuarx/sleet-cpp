@@ -113,6 +113,8 @@ auto sleet::widget::theme::default_dark() -> theme
     result.caret           = 0xE6E8EB_rgb;
     result.selection       = 0x2F5FA8_rgb;
     result.muted           = 0x8A919B_rgb;
+    result.scrollbar_track = 0x2A2E35_rgb;
+    result.scrollbar_thumb = 0x5A626D_rgb;
     result.disabled        = { .bg = 0x23262B_rgb, .fg = 0x6B7280_rgb };
     result.disabled_border = 0x33373D_rgb;
     result.radius          = 6.F;
@@ -140,6 +142,8 @@ auto sleet::widget::theme::default_light() -> theme
     result.caret           = 0x1B1D21_rgb;
     result.selection       = 0xBFDBFE_rgb;
     result.muted           = 0x6B7280_rgb;
+    result.scrollbar_track = 0xE5E8EC_rgb;
+    result.scrollbar_thumb = 0xB6BDC6_rgb;
     result.disabled        = { .bg = 0xEDEFF2_rgb, .fg = 0x9CA3AF_rgb };
     result.disabled_border = 0xD1D5DB_rgb;
     result.radius          = 6.F;

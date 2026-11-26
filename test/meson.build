@@ -11,6 +11,7 @@ tests = {
   'layout':        'layout.cc',
   'wrap':          'wrap.cc',
   'render':        'render.cc',
+  'scroll':        'scroll.cc',
   'theme':         'theme.cc',
   'widgets':       'widgets.cc',
 }
