@@ -80,6 +80,8 @@ namespace
     [[nodiscard]]
     auto card(column_node content) -> box_node
     {
+        content |= width(sizing::fill());
+
         return box()[std::move(content)] | width(sizing::fill()) | padding(14.F)
              | background(0x1D2026_rgb) | border(0x2E333C_rgb);
     }
@@ -90,7 +92,7 @@ namespace
     {
         return row()[muted(std::move(key)) | hexpand(),
                      label(std::move(value)) | text_color(0xE6E8EB_rgb)]
-             | gap(12.F) | valign(align::center);
+             | gap(12.F) | width(sizing::fill()) | valign(align::center);
     }
 
 
@@ -130,7 +132,7 @@ namespace
                                      muted("Every built-in widget in one interactive window.")]
                                 | gap(2.F),
                             spacer(), badge("v0.1")]
-                    | gap(12.F) | valign(align::center);
+                    | gap(12.F) | width(sizing::fill()) | valign(align::center);
 
 
         auto input_card
@@ -163,7 +165,7 @@ namespace
                             row()[label("Volume") | text_color(0xE6E8EB_rgb),
                                   slider(current.volume, "volume") | hexpand(),
                                   badge(std::format("{:.0f}%", current.volume * 100.F))]
-                                | gap(10.F) | valign(align::center),
+                                | gap(10.F) | width(sizing::fill()) | valign(align::center),
                             progress_bar(current.volume, 10.F),
                             muted("Drag the slider or focus it and use the arrow keys.")]
                    | gap(10.F));
@@ -219,7 +221,7 @@ namespace
         auto footer = row()[muted("Tab moves focus. Click a combo header to open it. "
                                   "Clicking outside closes it."),
                             spacer(), badge("interactive")]
-                    | gap(12.F) | valign(align::center);
+                    | gap(12.F) | width(sizing::fill()) | valign(align::center);
 
 
         return column()[std::move(header), separator(),

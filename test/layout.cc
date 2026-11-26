@@ -167,6 +167,23 @@ const boost::ut::suite layout_tests = []
         expect(eq(fill->size.x, 200.F));
     };
 
+    "fill children stretch inside a fill-width column"_test = []
+    {
+        auto tree = box()[column()[box() | id("field") | height(20.F) | width(sizing::fill())]
+                          | width(sizing::fill())]
+                  | padding(10.F) | size(200.F, 100.F);
+
+        const auto  result = layout_of(tree);
+        const auto *field  = result.find("field");
+
+        expect(field != nullptr);
+        if (field != nullptr)
+        {
+            expect(eq(field->position.x, 10.F));
+            expect(eq(field->size.x, 180.F));
+        }
+    };
+
     "box alignment centers children"_test = []
     {
         auto tree = box()[box() | id("child") | size(20.F)] | size(100.F) | halign(align::center)
