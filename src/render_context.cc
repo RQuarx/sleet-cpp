@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <format>
 #include <limits>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -105,28 +106,40 @@ namespace
         std::string text;
         TTF_Font   *font = nullptr;
         color       fg {};
-
-        [[nodiscard]] friend auto operator==(const text_key &lhs, const text_key &rhs) noexcept
-            -> bool
-        { return lhs.text == rhs.text and lhs.font == rhs.font and lhs.fg == rhs.fg; }
     };
 
 
-    struct text_key_hash
+    /// A non-owning lookup key, so cache hits do not copy the line.
+    struct text_key_view
     {
-        [[nodiscard]]
-        auto operator()(const text_key &key) const noexcept -> std::size_t
-        {
-            auto seed = std::hash<std::string> {}(key.text);
-            seed
-                ^= std::hash<const void *> {}(key.font) + 0x9E3779B9U + (seed << 6U) + (seed >> 2U);
+        std::string_view text;
+        TTF_Font        *font = nullptr;
+        color            fg {};
+    };
 
-            const auto packed = (static_cast<std::uint32_t>(key.fg.r) << 24U)
-                              | (static_cast<std::uint32_t>(key.fg.g) << 16U)
-                              | (static_cast<std::uint32_t>(key.fg.b) << 8U)
-                              | static_cast<std::uint32_t>(key.fg.a);
-            seed ^= std::hash<std::uint32_t> {}(packed) + 0x9E3779B9U + (seed << 6U) + (seed >> 2U);
-            return seed;
+
+    [[nodiscard]]
+    constexpr auto packed_color(color value) noexcept -> std::uint32_t
+    {
+        return (static_cast<std::uint32_t>(value.r) << 24U)
+             | (static_cast<std::uint32_t>(value.g) << 16U)
+             | (static_cast<std::uint32_t>(value.b) << 8U)
+             | static_cast<std::uint32_t>(value.a);
+    }
+
+
+    struct text_key_less
+    {
+        using is_transparent = void;
+
+        template <typename Lhs, typename Rhs>
+        [[nodiscard]]
+        auto operator()(const Lhs &lhs, const Rhs &rhs) const noexcept -> bool
+        {
+            const auto order = std::string_view { lhs.text }.compare(rhs.text);
+            if (order != 0) return order < 0;
+            if (lhs.font != rhs.font) return std::less<const TTF_Font *> {}(lhs.font, rhs.font);
+            return packed_color(lhs.fg) < packed_color(rhs.fg);
         }
     };
 
@@ -136,6 +149,48 @@ namespace
         SDL_Texture *texture = nullptr;
         vec2         size {};
         std::size_t  last_used = 0;
+    };
+
+
+    struct wrap_key
+    {
+        std::string text;
+        TTF_Font   *font = nullptr;
+
+        /// Negative means "no width limit". Real limits are clamped to >= 0.
+        float width_limit = -1.F;
+    };
+
+
+    struct wrap_key_view
+    {
+        std::string_view text;
+        TTF_Font        *font = nullptr;
+        float            width_limit = -1.F;
+    };
+
+
+    struct wrap_key_less
+    {
+        using is_transparent = void;
+
+        template <typename Lhs, typename Rhs>
+        [[nodiscard]]
+        auto operator()(const Lhs &lhs, const Rhs &rhs) const noexcept -> bool
+        {
+            if (lhs.width_limit != rhs.width_limit) return lhs.width_limit < rhs.width_limit;
+            if (lhs.font != rhs.font) return std::less<const TTF_Font *> {}(lhs.font, rhs.font);
+            return std::string_view { lhs.text } < rhs.text;
+        }
+    };
+
+
+    struct wrap_entry
+    {
+        /// Views into the owning \c wrap_key text. The key lives in a map, so
+        /// its string stays put while the entry is cached.
+        std::vector<sleet::txt::wrapped_line> lines;
+        std::size_t                            last_used = 0;
     };
 
 
@@ -433,7 +488,8 @@ struct sleet::render_context::impl
     std::size_t cache_clock = 0;
 
     std::unordered_map<font_key, TTF_Font *, font_key_hash> fonts;
-    std::unordered_map<text_key, text_entry, text_key_hash> text_cache;
+    std::map<text_key, text_entry, text_key_less>            text_cache;
+    std::map<wrap_key, wrap_entry, wrap_key_less>            wrap_cache;
 
 
     impl(SDL_Renderer *sdl_renderer, widget::theme initial_theme)
@@ -444,6 +500,7 @@ struct sleet::render_context::impl
     ~impl()
     {
         clear_text_cache();
+        clear_wrap_cache();
         clear_fonts();
     }
 
@@ -454,6 +511,9 @@ struct sleet::render_context::impl
             if (entry.texture != nullptr) SDL_DestroyTexture(entry.texture);
         text_cache.clear();
     }
+
+
+    void clear_wrap_cache() noexcept { wrap_cache.clear(); }
 
 
     void clear_fonts() noexcept
@@ -486,6 +546,7 @@ struct sleet::render_context::impl
 
         pixel_scale = scale;
         clear_text_cache();
+        clear_wrap_cache();
         clear_fonts();
     }
 
@@ -717,7 +778,10 @@ struct sleet::render_context::impl
         while (current != end)
         {
             const auto code_point = utf8::unchecked::next(current);
-            if (code_point <= 0x20U) continue;
+
+            // Printable ASCII is present in every usable text face. Skipping
+            // the per-glyph query is a large win on ordinary prose.
+            if (code_point <= 0x7FU) continue;
             if (!TTF_FontHasGlyph(font, code_point)) return false;
         }
 
@@ -760,11 +824,48 @@ struct sleet::render_context::impl
     }
 
 
+    /// Wraps text through a cache. Layout measurement and drawing ask for the
+    /// same lines every frame, so repeating line breaking and glyph
+    /// measurement was pure overhead.
     [[nodiscard]]
     auto
     wrapped_lines(const font_spec &spec, std::string_view text, std::optional<float> width_limit)
-        -> kei::result<std::vector<sleet::txt::wrapped_line>>
+        -> kei::result<const std::vector<sleet::txt::wrapped_line> *>
     {
+        auto primary = get_font(spec);
+        if (!primary) return std::move(primary.error()).unexpected();
+
+        const auto limit
+            = width_limit.transform([](float width) noexcept { return std::max(0.F, width); });
+        const auto lookup = wrap_key_view { text, *primary, limit.value_or(-1.F) };
+
+        if (auto it = wrap_cache.find(lookup); it != wrap_cache.end())
+        {
+            it->second.last_used = ++cache_clock;
+            return &it->second.lines;
+        }
+
+        constexpr auto cache_limit = std::size_t { 1024 };
+        if (wrap_cache.size() >= cache_limit)
+        {
+            using iterator = decltype(wrap_cache)::iterator;
+            std::vector<iterator> entries;
+            entries.reserve(wrap_cache.size());
+            for (auto it = wrap_cache.begin(); it != wrap_cache.end(); ++it)
+                entries.push_back(it);
+
+            const auto evict = entries.size() / 4;
+            std::nth_element(entries.begin(), entries.begin() + static_cast<std::ptrdiff_t>(evict),
+                             entries.end(), [](iterator first, iterator second)
+                             { return first->second.last_used < second->second.last_used; });
+
+            for (std::size_t i = 0; i < evict; i++) wrap_cache.erase(entries[i]);
+        }
+
+        auto [it, inserted] = wrap_cache.emplace(
+            wrap_key { std::string { text }, *primary, lookup.width_limit }, wrap_entry {});
+        (void)inserted;
+
         const auto measure = [this, &spec](std::string_view line) -> kei::result<float>
         {
             auto font = get_font_covering(spec, line);
@@ -772,7 +873,16 @@ struct sleet::render_context::impl
             return measure_line(*font, line);
         };
 
-        return sleet::txt::wrap(text, width_limit, measure);
+        auto lines = sleet::txt::wrap(it->first.text, limit, measure);
+        if (!lines)
+        {
+            wrap_cache.erase(it);
+            return std::move(lines.error()).unexpected();
+        }
+
+        it->second.lines     = std::move(*lines);
+        it->second.last_used = ++cache_clock;
+        return &it->second.lines;
     }
 
 
@@ -780,9 +890,9 @@ struct sleet::render_context::impl
     auto get_text_texture(std::string_view text, TTF_Font *font, color fg)
         -> kei::result<text_entry *>
     {
-        text_key key { .text = std::string { text }, .font = font, .fg = fg };
+        const auto lookup = text_key_view { text, font, fg };
 
-        if (const auto it = text_cache.find(key); it != text_cache.end())
+        if (const auto it = text_cache.find(lookup); it != text_cache.end())
         {
             it->second.last_used = ++cache_clock;
             return &it->second;
@@ -828,11 +938,14 @@ struct sleet::render_context::impl
             return sleet::sdl_error { "Failed to query the text texture size." }.unexpected();
         }
 
-        auto [it, inserted] = text_cache.emplace(std::move(key), text_entry {
-                                                                     .texture   = texture,
-                                                                     .size      = { width, height },
-                                                                     .last_used = ++cache_clock,
-        });
+        auto [it, inserted] = text_cache.emplace(
+            text_key { std::string { text }, font, fg },
+            text_entry {
+                .texture   = texture,
+                .size      = { width, height },
+                .last_used = ++cache_clock,
+            });
+        (void)inserted;
         return &it->second;
     }
 
@@ -1402,13 +1515,13 @@ struct sleet::render_context::impl
 
         auto lines = wrapped_lines(node.font, node.text, content.size.x);
         if (!lines) return std::move(lines.error()).unexpected();
-        if (lines->empty()) return {};
+        if ((*lines)->empty()) return {};
 
         auto clip = enter_text_clip(content);
         if (!clip) return std::move(clip.error()).unexpected();
         if (!*clip) return {};
 
-        auto drawn    = draw_text_lines(node, content, node.font, *font, fg, *lines);
+        auto drawn    = draw_text_lines(node, content, node.font, *font, fg, **lines);
         auto restored = leave_text_clip(**clip);
 
         if (!drawn) return drawn;
@@ -1960,14 +2073,14 @@ auto sleet::render_context::measure_text(std::string_view         text,
 
     auto lines = m_impl->wrapped_lines(font, text, width_limit);
     if (!lines) return std::move(lines.error()).unexpected();
-    if (lines->empty()) return vec2 { 0.F, 0.F };
+    if ((*lines)->empty()) return vec2 { 0.F, 0.F };
 
     float width = 0.F;
-    for (const auto &line : *lines) width = std::max(width, line.width);
+    for (const auto &line : **lines) width = std::max(width, line.width);
 
     const auto font_height  = static_cast<float>(std::max(1, TTF_GetFontHeight(*ttf_font)));
     const auto line_height  = font_height / m_impl->pixel_scale;
-    const auto total_height = line_height * static_cast<float>(lines->size());
+    const auto total_height = line_height * static_cast<float>((*lines)->size());
     return vec2 { width, total_height };
 }
 
@@ -2019,6 +2132,7 @@ void sleet::render_context::set_theme(widget::theme theme)
     auto previous = std::move(m_impl->theme);
 
     m_impl->clear_text_cache();
+    m_impl->clear_wrap_cache();
     m_impl->clear_fonts();
     m_impl->theme = std::move(theme);
 
@@ -2027,6 +2141,7 @@ void sleet::render_context::set_theme(widget::theme theme)
     if (auto body_font = m_impl->get_font(widget::font_spec {}); !body_font)
     {
         m_impl->clear_text_cache();
+        m_impl->clear_wrap_cache();
         m_impl->clear_fonts();
         m_impl->theme = std::move(previous);
         throw std::move(body_font.error());

@@ -25,21 +25,22 @@ namespace
     auto choose_break(std::string_view                                  text,
                       std::size_t                                       start,
                       const std::vector<sleet::txt::break_opportunity> &opportunities,
+                      std::size_t                                       first_index,
+                      std::size_t                                       mandatory_index,
                       std::optional<float>                              width_limit,
                       const sleet::txt::line_measurer &measure_line) -> kei::result<std::size_t>
     {
-        const auto first
-            = std::find_if(opportunities.begin(), opportunities.end(),
-                           [start](const auto &opportunity) { return opportunity.offset > start; });
+        // The caller keeps this cursor advancing between lines. Rescanning
+        // from the beginning for every line made long paragraphs quadratic.
+        const auto first = opportunities.begin() + static_cast<std::ptrdiff_t>(first_index);
         if (first == opportunities.end()) return text.size();
 
-        // A line never crosses a mandatory break. Find the first one so the
-        // search below only considers candidates on this line.
-        const auto limit
-            = std::find_if(first, opportunities.end(), [](const auto &opportunity)
-                           { return opportunity.kind == sleet::txt::break_kind::mandatory; });
-
-        const auto last = limit == opportunities.end() ? opportunities.end() - 1 : limit;
+        // A line never crosses the next mandatory break. Its index is also
+        // maintained by the caller so this does not rescan the whole tail of
+        // the paragraph on every line.
+        const auto last = mandatory_index == opportunities.size()
+                            ? opportunities.end() - 1
+                            : opportunities.begin() + static_cast<std::ptrdiff_t>(mandatory_index);
 
         // Without a width limit, only mandatory breaks matter; no measurement
         // is needed to choose the line.
@@ -101,10 +102,32 @@ auto sleet::txt::wrap(std::string_view     text,
     const auto width_limit
         = max_width.transform([](float width) noexcept { return std::max(0.F, width); });
 
-    std::size_t start = 0;
+    std::size_t start     = 0;
+    std::size_t cursor    = 0;
+    std::size_t mandatory = 0;
+
+    const auto advance_to_mandatory = [&opportunities](std::size_t index)
+    {
+        while (index < opportunities->size()
+               and (*opportunities)[index].kind != sleet::txt::break_kind::mandatory)
+            ++index;
+        return index;
+    };
+
+    mandatory = advance_to_mandatory(0);
+
     while (start < text.size())
     {
-        auto chosen = choose_break(text, start, *opportunities, width_limit, measure_line);
+        while (cursor < opportunities->size() and (*opportunities)[cursor].offset <= start)
+            ++cursor;
+
+        while (mandatory < opportunities->size() and (*opportunities)[mandatory].offset <= start)
+            mandatory = advance_to_mandatory(mandatory + 1);
+
+        if (cursor == opportunities->size()) break;
+
+        auto chosen = choose_break(text, start, *opportunities, cursor, mandatory, width_limit,
+                                   measure_line);
         if (!chosen) return std::move(chosen.error()).unexpected();
 
         const auto line = trim_line_end(text.substr(start, *chosen - start));
