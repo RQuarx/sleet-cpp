@@ -14,6 +14,7 @@ namespace
     using sleet::math::rect;
     using sleet::math::vec2;
     using sleet::widget::align;
+    using sleet::widget::anchor_point;
     using sleet::widget::font_spec;
     using sleet::widget::justify;
     using sleet::widget::node_data;
@@ -83,6 +84,41 @@ namespace
         }
 
         return 0.F;
+    }
+
+
+    /// Resolves an anchor inside a content box. Margins inset the child from
+    /// the anchored edge; centered axes ignore margins so the child stays
+    /// centered even when it has asymmetric spacing.
+    [[nodiscard]]
+    auto anchor_position(anchor_point       anchor,
+                         vec2               content_position,
+                         vec2               content_size,
+                         vec2               child_size,
+                         const edge_insets &margin) noexcept -> vec2
+    {
+        const auto left     = content_position.x + margin.left;
+        const auto center_x = content_position.x + ((content_size.x - child_size.x) / 2.F);
+        const auto right    = content_position.x + content_size.x - child_size.x - margin.right;
+
+        const auto top      = content_position.y + margin.top;
+        const auto center_y = content_position.y + ((content_size.y - child_size.y) / 2.F);
+        const auto bottom   = content_position.y + content_size.y - child_size.y - margin.bottom;
+
+        switch (anchor)
+        {
+        case anchor_point::top_left:      return { left, top };
+        case anchor_point::top_center:    return { center_x, top };
+        case anchor_point::top_right:     return { right, top };
+        case anchor_point::center_left:   return { left, center_y };
+        case anchor_point::center:        return { center_x, center_y };
+        case anchor_point::center_right:  return { right, center_y };
+        case anchor_point::bottom_left:   return { left, bottom };
+        case anchor_point::bottom_center: return { center_x, bottom };
+        case anchor_point::bottom_right:  return { right, bottom };
+        }
+
+        return content_position;
     }
 
     struct measured
@@ -752,7 +788,8 @@ namespace
     /// Positions floating children after the in-flow content has a resolved
     /// size. Floating children use their intrinsic height unless it is fixed;
     /// fill and grow only stretch the horizontal axis so a popup does not
-    /// become as tall as its parent.
+    /// become as tall as its parent. The anchor resolves against the parent's
+    /// content box, then \c placement adds a local offset.
     [[nodiscard]]
     auto arrange_floating_children(const node_data     &node,
                                    measured            &result,
@@ -780,8 +817,9 @@ namespace
                 !res)
                 return res;
 
-            const auto position
-                = content_position + child.placement + vec2 { child.margin.left, child.margin.top };
+            const auto position = anchor_position(child.placement_anchor, content_position,
+                                                  content_size, size, child.margin)
+                                + child.placement;
 
             if (auto res = arrange(child, result.children[i], position, size, measure); !res)
                 return res;
@@ -847,7 +885,8 @@ namespace
         if (!out.rects.try_emplace(node.id, rect { result.position, result.size }).second)
             return sleet::error { "Duplicate widget id \"{}\".", node.id.view() }.unexpected();
 
-        if (node.floating) out.floating.push_back({ node.id, node.z_index });
+        if (node.floating and node.parent != nullptr)
+            out.floating.push_back({ node.id, node.z_index });
 
         for (std::size_t i = 0; i < node.children.size(); i++)
             if (auto res = collect_rects(node.children[i], result.children[i], out); !res)

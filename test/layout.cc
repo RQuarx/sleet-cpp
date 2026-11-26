@@ -374,6 +374,87 @@ const boost::ut::suite layout_tests = []
         expect(result.floating[1].id == widget_id { "high" });
     };
 
+    "floating anchors resolve against the parent content box"_test = []
+    {
+        auto tree = box()[box() | id("tl") | size(20.F, 10.F) | floating()
+                              | anchor_at(anchor_point::top_left),
+                          box() | id("tc") | size(20.F, 10.F) | floating()
+                              | anchor_at(anchor_point::top_center),
+                          box() | id("tr") | size(20.F, 10.F) | floating()
+                              | anchor_at(anchor_point::top_right),
+                          box() | id("cl") | size(20.F, 10.F) | floating()
+                              | anchor_at(anchor_point::center_left),
+                          box() | id("cc") | size(20.F, 10.F) | floating()
+                              | anchor_at(anchor_point::center),
+                          box() | id("cr") | size(20.F, 10.F) | floating()
+                              | anchor_at(anchor_point::center_right),
+                          box() | id("bl") | size(20.F, 10.F) | floating()
+                              | anchor_at(anchor_point::bottom_left),
+                          box() | id("bc") | size(20.F, 10.F) | floating()
+                              | anchor_at(anchor_point::bottom_center),
+                          box() | id("br") | size(20.F, 10.F) | floating()
+                              | anchor_at(anchor_point::bottom_right)]
+                  | size(200.F, 100.F);
+
+        const auto result = layout_of(tree);
+
+        const auto at = [&result](const char *id)
+        {
+            const auto *bounds = result.find(id);
+            expect(bounds != nullptr);
+            return bounds == nullptr ? vec2 {} : bounds->position;
+        };
+
+        expect(at("tl") == vec2 { 0.F, 0.F });
+        expect(at("tc") == vec2 { 90.F, 0.F });
+        expect(at("tr") == vec2 { 180.F, 0.F });
+        expect(at("cl") == vec2 { 0.F, 45.F });
+        expect(at("cc") == vec2 { 90.F, 45.F });
+        expect(at("cr") == vec2 { 180.F, 45.F });
+        expect(at("bl") == vec2 { 0.F, 90.F });
+        expect(at("bc") == vec2 { 90.F, 90.F });
+        expect(at("br") == vec2 { 180.F, 90.F });
+    };
+
+    "floating anchors use the parent content box"_test = []
+    {
+        auto tree = box()[box() | id("corner") | size(20.F, 10.F) | floating()
+                          | anchor_at(anchor_point::bottom_right)]
+                  | padding(5.F) | size(200.F, 100.F);
+
+        const auto  result = layout_of(tree);
+        const auto *corner = result.find("corner");
+
+        expect(corner != nullptr);
+        if (corner != nullptr) expect(corner->position == vec2 { 175.F, 85.F });
+    };
+
+    "floating anchors combine margins and local placement"_test = []
+    {
+        auto tree
+            = box()[box() | id("corner") | size(20.F, 10.F) | floating()
+                    | anchor_at(anchor_point::bottom_right) | margin(4.F) | placement(2.F, 3.F)]
+            | size(200.F, 100.F);
+
+        const auto  result = layout_of(tree);
+        const auto *corner = result.find("corner");
+
+        expect(corner != nullptr);
+        if (corner != nullptr) expect(corner->position == vec2 { 178.F, 89.F });
+    };
+
+    "a floating box can act as a layout root"_test = []
+    {
+        auto tree
+            = floating_box(anchor_point::bottom_right, 7)[box() | size(20.F)] | size(100.F, 50.F);
+
+        const auto result = layout_of(tree);
+
+        expect(result.root.position == vec2 { 0.F, 0.F });
+        expect(result.root.size == vec2 { 100.F, 50.F });
+        expect(result.floating.empty());
+    };
+
     "duplicate explicit ids fail before layout"_test = []
     {
         auto tree = box()[box() | id("same"), box() | id("same")];

@@ -187,6 +187,16 @@ namespace sleet
         }
 
 
+        /// True when \p node is the popup surface or one of its descendants.
+        [[nodiscard]]
+        inline auto inside_combo_popup(const widget::node_data *node) noexcept -> bool
+        {
+            for (auto *current = node; current != nullptr; current = current->parent)
+                if (current->control == widget::control_kind::combo_popup) return true;
+            return false;
+        }
+
+
         [[nodiscard]]
         inline auto interactive_target(const widget::node_data *node) noexcept
             -> const widget::node_data *
@@ -195,9 +205,11 @@ namespace sleet
             {
                 // Indicators are visual pieces of their parent control. Treating
                 // them as separate targets would break press/release matching
-                // and hide the parent's hover feedback.
+                // and hide the parent's hover feedback. A combo popup is a
+                // surface, not an interactive control of its own.
                 if (current->control == widget::control_kind::checkbox_indicator
-                    or current->control == widget::control_kind::radio_indicator)
+                    or current->control == widget::control_kind::radio_indicator
+                    or current->control == widget::control_kind::combo_popup)
                     continue;
 
                 if (!current->action.empty() or current->control != widget::control_kind::none)
@@ -766,16 +778,17 @@ namespace sleet
         static void apply_combo_visibility(widget::node_data                           &node,
                                            const std::unordered_set<widget::widget_id> &open)
         {
-            // A combo column owns its header and its option rows. Hide stale
-            // option rows even when the header disappeared or changed type
-            // between frames.
+            // A combo column owns its header and one floating popup. Hide stale
+            // popups even when the header disappeared or changed type between
+            // frames. Option rows live inside the popup, so hiding the popup
+            // hides the whole subtree for painting, focus, and hit testing.
             auto has_open_header = false;
             for (const auto &child : node.children)
                 if (child.control == widget::control_kind::combo_box and open.contains(child.id))
                     has_open_header = true;
 
             for (auto &child : node.children)
-                if (child.control == widget::control_kind::combo_option)
+                if (child.control == widget::control_kind::combo_popup)
                     child.visible = has_open_header;
 
             for (auto &child : node.children) apply_combo_visibility(child, open);
@@ -906,7 +919,7 @@ namespace sleet
                 apply_combo_visibility(*current.tree, current.open_combos);
             else if (header.parent != nullptr)
                 for (auto &sibling : header.parent->children)
-                    if (sibling.control == widget::control_kind::combo_option)
+                    if (sibling.control == widget::control_kind::combo_popup)
                         sibling.visible = open;
 
             current.dirty = true;
@@ -927,9 +940,12 @@ namespace sleet
         [[nodiscard]]
         static auto combo_header(const widget::node_data &node) -> const widget::node_data *
         {
-            if (node.parent == nullptr) return nullptr;
-            for (const auto &sibling : node.parent->children)
-                if (sibling.control == widget::control_kind::combo_box) return &sibling;
+            // Options live inside the popup box, so walk ancestors until one
+            // has a combo header as a sibling.
+            for (auto *current = &node; current->parent != nullptr; current = current->parent)
+                for (const auto &sibling : current->parent->children)
+                    if (sibling.control == widget::control_kind::combo_box) return &sibling;
+
             return nullptr;
         }
 
@@ -968,6 +984,7 @@ namespace sleet
 
             for (auto *node = hit; node != nullptr; node = node->parent)
                 if (node->control == widget::control_kind::combo_box
+                    or node->control == widget::control_kind::combo_popup
                     or node->control == widget::control_kind::combo_option)
                     return;
 
@@ -1279,6 +1296,23 @@ namespace sleet
         }
 
 
+        static void collect_combo_options(const widget::node_data                &node,
+                                          std::vector<const widget::node_data *> &options)
+        {
+            for (const auto &child : node.children)
+            {
+                if (child.control == widget::control_kind::combo_option)
+                {
+                    if (child.visible and !child.disabled and _impl::effectively_visible(child))
+                        options.push_back(&child);
+                    continue;
+                }
+
+                collect_combo_options(child, options);
+            }
+        }
+
+
         [[nodiscard]]
         static auto combo_options(const widget::node_data &header)
             -> std::vector<const widget::node_data *>
@@ -1286,11 +1320,7 @@ namespace sleet
             auto options = std::vector<const widget::node_data *> {};
             if (header.parent == nullptr) return options;
 
-            for (const auto &sibling : header.parent->children)
-                if (sibling.control == widget::control_kind::combo_option and sibling.visible
-                    and !sibling.disabled)
-                    options.push_back(&sibling);
-
+            collect_combo_options(*header.parent, options);
             return options;
         }
 
@@ -1432,6 +1462,7 @@ namespace sleet
             case widget::control_kind::combo_box: return handle_combo_key(current, *node, native);
             case widget::control_kind::combo_option:
                 return handle_combo_option_key(current, *node, native);
+            case widget::control_kind::combo_popup:
             case widget::control_kind::checkbox_indicator:
             case widget::control_kind::radio_indicator:
             case widget::control_kind::none:               break;
@@ -1480,6 +1511,10 @@ namespace sleet
             const auto *target = _impl::focus_target(hit);
             if (target == nullptr)
             {
+                // Clicking the popup's padding should leave focus where it is
+                // instead of dropping the combo header focus.
+                if (_impl::inside_combo_popup(hit)) return;
+
                 if (current.focused) current.dirty = true;
                 current.focused.reset();
                 current.selecting.reset();
@@ -1497,8 +1532,12 @@ namespace sleet
             const auto *bounds = current.layout->find(node.id);
             if (bounds == nullptr) return;
 
-            const auto width = std::max(1.F, bounds->size.x);
-            const auto value = std::clamp((x - bounds->position.x) / width, 0.F, 1.F);
+            // The thumb travels inside the track, so its center maps to the
+            // value instead of the outer bounds.
+            const auto radius = std::min(widget::slider_thumb_radius,
+                                         std::min(bounds->size.x, bounds->size.y) / 2.F);
+            const auto travel = std::max(1.F, bounds->size.x - (2.F * radius));
+            const auto value  = std::clamp((x - bounds->position.x - radius) / travel, 0.F, 1.F);
             if (value == node.control_value) return;
 
             node.control_value = value;
@@ -1566,6 +1605,7 @@ namespace sleet
 
             case widget::control_kind::combo_option: choose_combo_option(current, *node); break;
 
+            case widget::control_kind::combo_popup:
             case widget::control_kind::checkbox_indicator:
             case widget::control_kind::radio_indicator:
             case widget::control_kind::none:               break;

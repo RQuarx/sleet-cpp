@@ -50,8 +50,11 @@ overrides either per widget.
 
 Focused widgets draw a two-pixel focus border. Text inputs render their
 placeholder, caret, selection highlight, IME preedit text, and horizontal
-scroll. Checkbox and radio indicators, combo headers, slider tracks, and
+scroll. Checkbox and radio indicators, combo headers and popup surfaces, and
 progress fills resolve their colors from the control kind and semantic tone.
+Sliders are drawn from their control value as a rounded track, an accent fill,
+and a centered thumb; focus rings the thumb instead of the whole row, and
+disabled sliders mute all three parts.
 Hover and press colors apply to action widgets and propagate to their
 descendants, so a label inside a button inherits the button's state foreground
 unless it sets an explicit color. Disabled widgets use the theme's `disabled`

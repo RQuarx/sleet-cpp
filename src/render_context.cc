@@ -878,6 +878,7 @@ struct sleet::render_context::impl
             if (is_hovered(node) or is_pressed(node))
                 return theme.hover.bg ? theme.hover.bg : theme.field.bg;
             return theme.field.bg;
+        case widget::control_kind::combo_popup: return theme.base.bg;
         case widget::control_kind::combo_option:
             if (is_pressed(node)) return theme.clicked.bg;
             if (is_hovered(node)) return theme.hover.bg;
@@ -943,12 +944,16 @@ struct sleet::render_context::impl
     auto enabled_border(const node_data &node) const noexcept -> std::optional<color>
     {
         if (node.visual.border) return node.visual.border;
+
+        // Sliders draw their own focus ring around the thumb.
+        if (node.control == widget::control_kind::slider) return std::nullopt;
         if (focused and *focused == node.id) return theme.focus;
 
         switch (node.control)
         {
         case widget::control_kind::text_input:
-        case widget::control_kind::combo_box:          return theme.border;
+        case widget::control_kind::combo_box:
+        case widget::control_kind::combo_popup:        return theme.border;
         case widget::control_kind::checkbox_indicator:
         case widget::control_kind::radio_indicator:
             return node.checked ? theme.accent : theme.border;
@@ -1358,8 +1363,124 @@ struct sleet::render_context::impl
         case widget::control_kind::none:
         case widget::control_kind::text_input:
         case widget::control_kind::combo_box:
+        case widget::control_kind::combo_popup:
         case widget::control_kind::combo_option:
         case widget::control_kind::slider:       return {};
+        }
+
+        return {};
+    }
+
+
+    [[nodiscard]]
+    auto draw_combo_chevron(const node_data &node, const rect &bounds) -> kei::result<>
+    {
+        const auto physical = to_physical(bounds);
+        if (physical.size.x <= 0.F or physical.size.y <= 0.F) return {};
+
+        const auto scale       = pixel_scale;
+        const auto half_width  = 4.F * scale;
+        const auto half_height = 2.5F * scale;
+        const auto center_x    = physical.right() - (node.padding.right * scale) - half_width;
+        const auto center_y    = physical.center().y;
+        const auto stroke      = foreground_for(node, active_colors(node));
+        const auto thickness   = 1.5F * scale;
+
+        if (auto res = draw_line_aa(renderer, { center_x - half_width, center_y - half_height },
+                                    { center_x, center_y + half_height }, thickness, stroke);
+            !res)
+            return res;
+
+        return draw_line_aa(renderer, { center_x, center_y + half_height },
+                            { center_x + half_width, center_y - half_height }, thickness, stroke);
+    }
+
+
+    [[nodiscard]]
+    auto draw_slider(const node_data &node, const rect &bounds) -> kei::result<>
+    {
+        const auto physical = to_physical(bounds);
+        if (physical.size.x <= 0.F or physical.size.y <= 0.F) return {};
+
+        const auto disabled = is_disabled(node);
+        const auto mute     = [&](color value)
+        {
+            if (!disabled or !theme.disabled.bg) return value;
+            return mix(value, *theme.disabled.bg, 0.6F);
+        };
+
+        auto track_color
+            = mute(theme.field.bg.value_or(theme.base.bg.value_or(color { 0, 0, 0, 255 })));
+        auto       fill_color  = mute(theme.accent.value_or(track_color));
+        const auto thumb_color = mute(theme.accent_fg.value_or(color { 255, 255, 255, 255 }));
+
+        if (!disabled and (is_hovered(node) or is_pressed(node)))
+        {
+            if (theme.hover.bg) track_color = mix(track_color, *theme.hover.bg, 0.5F);
+            fill_color = mix(fill_color, color { 255, 255, 255, 255 }, 0.08F);
+        }
+
+        const auto border_color
+            = disabled ? theme.disabled_border.value_or(theme.border.value_or(track_color))
+                       : theme.border.value_or(track_color);
+        const auto thumb_border
+            = disabled ? theme.disabled_border.value_or(theme.border.value_or(thumb_color))
+                       : theme.border.value_or(theme.accent.value_or(thumb_color));
+
+        const auto scale        = pixel_scale;
+        const auto track_height = std::min(widget::slider_track_height * scale, physical.size.y);
+        const auto center_y     = physical.center().y;
+        const auto track        = rect {
+            physical.position.x,
+            center_y - (track_height / 2.F),
+            physical.size.x,
+            track_height,
+        };
+
+        if (auto res = fill_rounded(renderer, track, track_height / 2.F, track_color); !res)
+            return res;
+
+        const auto thumb_radius = std::min(widget::slider_thumb_radius * scale,
+                                           std::min(physical.size.x, physical.size.y) / 2.F);
+        const auto travel       = std::max(0.F, physical.size.x - (2.F * thumb_radius));
+        const auto thumb_center = physical.position.x + thumb_radius
+                                + (std::clamp(node.control_value, 0.F, 1.F) * travel);
+        const auto fill_width   = thumb_center - physical.position.x;
+
+        if (fill_width > 0.F)
+            if (auto res = fill_rounded(
+                    renderer,
+                    rect { physical.position.x, track.position.y, fill_width, track_height },
+                    track_height / 2.F, fill_color);
+                !res)
+                return res;
+
+        if (theme.border)
+            if (auto res = border_rounded(renderer, track, track_height / 2.F, border_color,
+                                          std::max(1.F, scale));
+                !res)
+                return res;
+
+        const auto thumb = rect {
+            thumb_center - thumb_radius,
+            center_y - thumb_radius,
+            thumb_radius * 2.F,
+            thumb_radius * 2.F,
+        };
+
+        if (auto res = fill_rounded(renderer, thumb, thumb_radius, thumb_color); !res) return res;
+        if (auto res
+            = border_rounded(renderer, thumb, thumb_radius, thumb_border, std::max(1.F, scale));
+            !res)
+            return res;
+
+        if (!disabled and focused and *focused == node.id)
+        {
+            const auto ring = thumb.inset(sleet::math::edge_insets { -2.F * scale });
+            if (auto res = border_rounded(renderer, ring, thumb_radius + (2.F * scale),
+                                          theme.focus.value_or(fill_color), 2.F * scale);
+                !res)
+                return res;
         }
 
         return {};
@@ -1394,6 +1515,12 @@ struct sleet::render_context::impl
         if (node.control == widget::control_kind::checkbox_indicator
             or node.control == widget::control_kind::radio_indicator)
             if (auto res = draw_indicator(node, physical); !res) return res;
+
+        if (node.control == widget::control_kind::slider)
+            if (auto res = draw_slider(node, *bounds); !res) return res;
+
+        if (node.control == widget::control_kind::combo_box)
+            if (auto res = draw_combo_chevron(node, *bounds); !res) return res;
 
         auto clip = std::optional<text_clip> {};
         if (node.clip_children)

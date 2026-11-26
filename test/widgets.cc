@@ -51,30 +51,59 @@ const boost::ut::suite widget_tests = []
         expect(eq(data.size.y.get_fixed_size(), 36.F));
     };
 
-    "combo boxes contain a header and hidden options"_test = []
+    "floating boxes anchor to parent edges and configure stacking"_test = []
+    {
+        const auto data = floating_box(anchor_point::bottom_right, 12).data_view();
+
+        expect(data.is_box());
+        expect(data.floating);
+        expect(data.placement_anchor == anchor_point::bottom_right);
+        expect(eq(data.z_index, 12));
+
+        auto        adjusted      = floating_box() | anchor_at(anchor_point::center) | stacking(7);
+        const auto &adjusted_data = adjusted.data_view();
+        expect(adjusted_data.placement_anchor == anchor_point::center);
+        expect(eq(adjusted_data.z_index, 7));
+    };
+
+    "combo boxes contain a header and a floating popup"_test = []
     {
         auto        widget = combo_box("Green", { "Red", "Green", "Blue" }, "color", "Pick one");
         const auto &data   = widget.data_view();
 
         expect(data.is_column());
-        expect(eq(data.children.size(), 4_u));
+        expect(eq(data.children.size(), 2_u));
 
         const auto &header = data.children[0];
         expect(header.control == control_kind::combo_box);
         expect(header.focusable);
         expect(eq(header.action, std::string { "color" }));
 
-        for (std::size_t i = 1; i < data.children.size(); i++)
+        const auto &popup = data.children[1];
+        expect(popup.is_box());
+        expect(popup.floating);
+        expect(popup.control == control_kind::combo_popup);
+        expect(popup.placement_anchor == anchor_point::top_left);
+        expect(eq(popup.placement.y, 38.F));
+        expect(eq(popup.z_index, 100));
+        expect(popup.size.x.is_fill());
+        expect(!popup.visible);
+        expect(eq(popup.children.size(), 1_u));
+
+        const auto &options = popup.children[0];
+        expect(options.is_column());
+        expect(eq(options.children.size(), 3_u));
+
+        for (const auto &option : options.children)
         {
-            const auto &option = data.children[i];
             expect(option.control == control_kind::combo_option);
-            expect(!option.visible);
+            expect(option.visible);
             expect(eq(option.action, std::string { "color" }));
             expect(!option.text.empty());
         }
 
-        expect(eq(data.children[1].text, std::string { "Red" }));
-        expect(eq(data.children[3].text, std::string { "Blue" }));
+        expect(eq(options.children[0].text, std::string { "Red" }));
+        expect(eq(options.children[2].text, std::string { "Blue" }));
     };
 
     "checkboxes and radios mark their indicators"_test = []
@@ -118,12 +147,12 @@ const boost::ut::suite widget_tests = []
         expect(high.focusable);
         expect(eq(high.control_value, 1.F));
         expect(eq(low.control_value, 0.F));
+        expect(high.children.empty());
 
-        const auto &track = high.children[0];
-        expect(track.is_row());
-        expect(eq(track.children.size(), 3_u));
-        expect(eq(track.children[0].flex, 1.F));
-        expect(eq(track.children[2].flex, 0.F));
+        // The renderer draws the track, fill, and thumb directly from the
+        // control value, so the slider is one node instead of three segments.
+        expect(high.size.x.is_fill());
+        expect(eq(high.size.y.get_fixed_size(), 20.F));
     };
 
     "progress bars split the track by value"_test = []

@@ -280,12 +280,20 @@ namespace sleet::widget
     }
 
 
-    /// Takes a node out of its parent's flow. \c placement is relative to the
-    /// parent's content box.
+    /// Takes a node out of its parent's flow. \c anchor_at selects the parent
+    /// corner or edge, and \c placement adds an offset from it.
     [[nodiscard]]
     inline auto floating(bool value = true)
     {
         return _impl::make_modifier([value](node_data &data) { data.floating = value; });
+    }
+
+    /// Positions a floating node against an edge or corner of its parent's
+    /// content box.
+    [[nodiscard]]
+    inline auto anchor_at(anchor_point value)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.placement_anchor = value; });
     }
 
     [[nodiscard]]
@@ -302,11 +310,18 @@ namespace sleet::widget
     inline auto offset(float x, float y)
     { return placement(x, y); }
 
+    /// Controls paint and hit-test order among floating siblings. Higher values
+    /// are painted later and tested first.
     [[nodiscard]]
     inline auto z_index(int value)
     {
         return _impl::make_modifier([value](node_data &data) { data.z_index = value; });
     }
+
+    /// A readable alias for \c z_index.
+    [[nodiscard]]
+    inline auto stacking(int value)
+    { return z_index(value); }
 
 
     [[nodiscard]]

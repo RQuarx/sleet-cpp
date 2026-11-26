@@ -52,6 +52,22 @@ namespace sleet::widget
     }
 
 
+    /// The edge or corner of a parent's content box that a floating node is
+    /// positioned against.
+    enum class anchor_point : std::uint8_t
+    {
+        top_left,
+        top_center,
+        top_right,
+        center_left,
+        center,
+        center_right,
+        bottom_left,
+        bottom_center,
+        bottom_right,
+    };
+
+
     /// An owning, type-erased widget tree.
     struct node_data
     {
@@ -86,11 +102,13 @@ namespace sleet::widget
         style     visual;
         bool      visible = true;
 
-        /// Floating nodes are taken out of the parent's flow, positioned by
-        /// \c placement relative to the parent's content box, and painted above
-        /// all in-flow content. Combo-box options use this to form a popup.
-        bool       floating = false;
-        math::vec2 placement { 0.F, 0.F };
+        /// Floating nodes are taken out of the parent's flow, positioned
+        /// against \c placement_anchor inside the parent's content box, and
+        /// painted above all in-flow content. \c placement is an additional
+        /// offset. Combo-box popups use this to form an overlay.
+        bool         floating         = false;
+        anchor_point placement_anchor = anchor_point::top_left;
+        math::vec2   placement { 0.F, 0.F };
 
         /// Floating nodes are painted in ascending z-order. In-flow content is
         /// painted first, so any floating node covers it.
@@ -340,6 +358,11 @@ namespace sleet::widget
         node_data m_data;
 
 
+    protected:
+        [[nodiscard]] auto data() noexcept -> node_data & { return m_data; }
+
+
+    private:
         template <typename Self>
         static auto prepare(Self &&self) -> std::remove_cvref_t<Self>
         { return std::forward<Self>(self); }

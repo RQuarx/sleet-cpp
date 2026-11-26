@@ -15,8 +15,8 @@ the window, renderer, and event loop.
 - Widget trees are ordinary values. Modifiers compose with `operator|`.
 - Flexbox-style layout with `fit`, `grow`, `fill`, and `fixed` sizing, plus
   margins, padding, gaps, alignment, justification, and per-child flex weights.
-- Floating overlays (`floating`, `placement`, `z_index`), clipping, and
-  wheel-scrollable viewports.
+- Floating overlays (`floating_box`, `anchor_at`, `placement`, `z_index`),
+  clipping, and wheel-scrollable viewports.
 - Stable generated widget ids derived from the call site, with explicit `id` or
   `key` overrides.
 - Text is measured at its intrinsic size and wrapped using Unicode line-break

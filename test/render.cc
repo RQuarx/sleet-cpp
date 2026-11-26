@@ -147,7 +147,8 @@ const boost::ut::suite render_tests = []
             auto controls = to_data(
                 column()[text_input("hello", "name", "Type here...") | id("field"),
                          checkbox("Check", true, "check"), radio_button("Radio", false, "radio"),
-                         combo_box("Green", { "Red", "Green" }, "color"), slider(0.5F, "volume")]
+                         combo_box("Green", { "Red", "Green" }, "color"),
+                         slider(0.5F, "volume") | id("slider")]
                 | padding(8.F) | gap(4.F) | size(sizing::fill()));
             expect(static_cast<bool>(controls.finalize()));
 
@@ -163,6 +164,51 @@ const boost::ut::suite render_tests = []
 
                 context.set_focused(std::nullopt);
                 context.set_text_selection(std::nullopt, {});
+            }
+
+            // The slider is one rounded track with an accent fill and a
+            // centered thumb, not three adjacent rectangles.
+            auto slider_tree
+                = to_data(box()[slider(0.5F, "volume") | id("slider")] | size(60.F, 20.F));
+            expect(static_cast<bool>(slider_tree.finalize()));
+
+            auto slider_layout = calculate_layout(slider_tree, measure, { 64.F, 64.F });
+            expect(static_cast<bool>(slider_layout));
+            if (slider_layout)
+            {
+                expect(static_cast<bool>(context.render(slider_tree, *slider_layout)));
+
+                if (const auto *slider = slider_layout->find("slider"); slider != nullptr)
+                {
+                    auto *pixels = SDL_RenderReadPixels(renderer, nullptr);
+                    expect(pixels != nullptr);
+                    if (pixels != nullptr)
+                    {
+                        const auto sample = [pixels](int x, int y)
+                        {
+                            std::uint8_t r = 0;
+                            std::uint8_t g = 0;
+                            std::uint8_t b = 0;
+                            std::uint8_t a = 0;
+                            expect(SDL_ReadSurfacePixel(pixels, x, y, &r, &g, &b, &a));
+                            return sleet::color { r, g, b, a };
+                        };
+
+                        const auto center_y
+                            = static_cast<int>(slider->position.y + (slider->size.y / 2.F));
+                        const auto fill_x
+                            = static_cast<int>(slider->position.x + (slider->size.x * 0.25F));
+                        const auto thumb_x
+                            = static_cast<int>(slider->position.x + (slider->size.x * 0.5F));
+
+                        const auto fill  = sample(fill_x, center_y);
+                        const auto thumb = sample(thumb_x, center_y);
+
+                        expect(fill == 0x3B82F6_rgb);
+                        expect(thumb == 0xFFFFFF_rgb);
+                        SDL_DestroySurface(pixels);
+                    }
+                }
             }
 
             // Floating content is painted above normal flow, even when it

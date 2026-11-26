@@ -69,15 +69,24 @@ how the runtime uses them.
 
 `floating()` takes a node out of its parent's flow. Its size is still measured,
 but it consumes no space and does not affect the parent's intrinsic size.
-`placement(x, y)` positions it relative to the parent's content box, and
-`z_index(n)` controls paint order:
+`anchor_at(anchor_point)` selects the parent content-box edge or corner to
+position against, `placement(x, y)` adds a local offset, and `z_index(n)` (or
+its alias `stacking(n)`) controls paint order:
 
 ```cpp
-auto menu = column()[...]
-          | floating()
-          | placement(0.F, 38.F)
-          | z_index(100);
+auto menu = floating_box(anchor_point::top_left, 100)[...]
+          | placement(0.F, 38.F);
 ```
+
+The anchors are `top_left`, `top_center`, `top_right`, `center_left`, `center`,
+`center_right`, `bottom_left`, `bottom_center`, and `bottom_right`. Margins
+inset a floating node from the anchored edges; centered axes ignore margins so
+the node stays centered.
+
+`floating_box(anchor, stacking)` is a `box_node` with `floating`, `anchor_at`,
+and `z_index` already applied. It is the root of its overlay subtree, so its
+children use ordinary row, column, and box layout. A floating node used as the
+layout root is laid out like any other root and is not collected as an overlay.
 
 Floating nodes are painted after all in-flow content, in ascending `z_index`
 order. They are hit-tested first, in reverse paint order, so a popup receives

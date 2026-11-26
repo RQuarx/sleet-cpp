@@ -37,11 +37,12 @@ namespace
     {
         const auto display = value.empty() ? hint : value;
 
+        // The renderer draws the disclosure chevron; the blank box keeps the
+        // label from running underneath it.
         auto header_content
             = row(origin)[label(display, origin) | hexpand() | align_self(align::center),
-                          label("\xE2\x96\xBE", origin) | align_self(align::center)
-                              | text_size(12.F)]
-            | gap(8.F) | valign(align::center);
+                          box(origin) | width(8.F) | align_self(align::center)]
+            | gap(8.F) | width(sizing::fill()) | valign(align::center);
 
         auto header = box(origin)[std::move(header_content)] | padding(8.F, 10.F) | height(36.F)
                     | width(sizing::fill()) | control(control_kind::combo_box) | focusable()
@@ -52,20 +53,28 @@ namespace
         result     |= gap(2.F);
         result      = result[std::move(header)];
 
-        // Options float below the header instead of growing the column, so
-        // opening a combo box never pushes the rest of the layout down.
-        auto offset = 38.F;
+        // The option list is one floating box: it is the root of the popup
+        // subtree and keeps normal column layout for its rows.
+        auto options_column = column(origin);
+        options_column     |= width(sizing::fill());
+        options_column     |= gap(2.F);
+
         for (std::size_t i = 0; i < options.size(); i++)
         {
             auto option = option_label(options[i], origin) | control(control_kind::combo_option)
-                        | focusable() | on_click(action) | text_of(options[i]) | visible(false)
-                        | floating() | placement(0.F, offset) | z_index(100) | radius(4.F);
+                        | focusable() | on_click(action) | text_of(options[i]) | radius(4.F);
 
             if (option_ids != nullptr and i < option_ids->size()) option |= key((*option_ids)[i]);
 
-            result  = result[std::move(option)];
-            offset += 34.F;
+            options_column = options_column[std::move(option)];
         }
+
+        auto popup = floating_box(anchor_point::top_left, 100, origin) | width(sizing::fill())
+                   | placement(0.F, 38.F) | padding(2.F) | visible(false)
+                   | control(control_kind::combo_popup);
+        popup      = popup[std::move(options_column)];
+
+        result = result[std::move(popup)];
 
         return result;
     }
@@ -73,6 +82,9 @@ namespace
 
 
 auto sleet::widget::box(std::source_location origin) -> box_node { return { origin }; }
+auto sleet::widget::floating_box(anchor_point at, int stacking, std::source_location origin)
+    -> floating_node
+{ return floating_node { origin, at, stacking }; }
 auto sleet::widget::column(std::source_location origin) -> column_node { return { origin }; }
 auto sleet::widget::row(std::source_location origin) -> row_node { return { origin }; }
 auto sleet::widget::label(std::string text, std::source_location origin) -> label_node
@@ -191,17 +203,10 @@ auto sleet::widget::slider(float value, std::string action, std::source_location
 {
     value = std::clamp(value, 0.F, 1.F);
 
-    auto left  = box(origin) | width(sizing::grow()) | flex(value) | height(sizing::fill())
-               | tone_of(tone::accent);
-    auto thumb = box(origin) | width(16.F) | height(sizing::fill()) | tone_of(tone::accent_fg)
-               | radius(8.F);
-    auto right = box(origin) | width(sizing::grow()) | flex(1.F - value) | height(sizing::fill())
-               | tone_of(tone::field);
-
-    return box(origin)[row(origin)[std::move(left), std::move(thumb), std::move(right)] | gap(0.F)
-                       | width(sizing::fill()) | height(sizing::fill())]
-         | width(sizing::fill()) | height(20.F) | control(control_kind::slider) | focusable()
-         | on_click(std::move(action)) | control_value(value);
+    // The renderer draws the track, fill, and thumb from the control value, so
+    // the slider stays one clean shape instead of three adjacent boxes.
+    return box(origin) | width(sizing::fill()) | height(20.F) | control(control_kind::slider)
+         | focusable() | on_click(std::move(action)) | control_value(value);
 }
 
 

@@ -16,6 +16,7 @@ namespace sleet::widget
         none,
         text_input,
         combo_box,
+        combo_popup,
         combo_option,
         slider,
         checkbox_indicator,
@@ -46,6 +47,11 @@ namespace sleet::widget
         ghost,
         danger,
     };
+
+
+    /// Logical-pixel geometry shared by the slider renderer and hit testing.
+    inline constexpr float slider_track_height = 6.F;
+    inline constexpr float slider_thumb_radius = 8.F;
 
 
     /// A caret and selection anchor stored as byte offsets into UTF-8 text.

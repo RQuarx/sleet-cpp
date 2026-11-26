@@ -26,6 +26,38 @@ namespace sleet::widget
     using badge_node      = node<node_kind::text>;
 
 
+    /// A box that is laid out independently of its parent's flow and anchored
+    /// inside the parent's content box. It is otherwise a normal box: sizing,
+    /// padding, gaps, alignment, and children all behave like \c box_node.
+    class floating_node : public node<node_kind::box>
+    {
+    public:
+        explicit floating_node(std::source_location origin,
+                               anchor_point         at       = anchor_point::top_left,
+                               int                  stacking = 0)
+            : node<node_kind::box>(origin)
+        {
+            auto &value            = data();
+            value.floating         = true;
+            value.placement_anchor = at;
+            value.z_index          = stacking;
+        }
+    };
+
+
+    /// Creates a floating box. The box is the root of its overlay subtree and
+    /// can contain any normal layout widgets.
+    /// \param at The parent edge or corner to anchor against.
+    /// \param stacking The paint and hit-test order among floating nodes.
+    /// \param origin The source location used for diagnostics.
+    /// \return The floating box widget.
+    [[nodiscard]]
+    auto floating_box(anchor_point         at       = anchor_point::top_left,
+                      int                  stacking = 0,
+                      std::source_location origin   = std::source_location::current())
+        -> floating_node;
+
+
     [[nodiscard]]
     auto box(std::source_location origin = std::source_location::current()) -> box_node;
 

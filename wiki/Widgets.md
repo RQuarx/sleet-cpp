@@ -10,6 +10,10 @@ column();   // vertical stack
 label("text");
 ```
 
+`floating_box(anchor, stacking)` is a box that lives outside its parent's flow.
+It anchors to a parent edge or corner and acts as the root of a popup or
+overlay subtree; see [[Layout]] for anchors and paint order.
+
 Built-in widgets are thin compositions of those primitives:
 
 | Factory | Description |
@@ -75,7 +79,7 @@ box()[label("Hello")]
 | `align_self(align)` | Override alignment for one child |
 | `justify_content` | Main-axis distribution in a row/column |
 | `visible(bool)` | Hide a subtree |
-| `floating(bool)`, `placement(x, y)`, `z_index(n)` | Overlay positioning outside normal flow |
+| `floating(bool)`, `anchor_at(anchor_point)`, `placement(x, y)`, `z_index(n)`, `stacking(n)` | Overlay positioning outside normal flow |
 | `clip(bool)`, `clip_children(bool)` | Clip descendants to this node's bounds |
 | `scrollable(bool)` | Wheel-scroll a clipped viewport |
 | `disabled(bool)` | Remove a subtree from focus and input; disabled widgets are not pointer targets |
