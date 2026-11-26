@@ -1,6 +1,5 @@
 #pragma once
 #include <algorithm>
-#include <atomic>
 #include <cmath>
 #include <concepts>
 #include <cstdint>
@@ -95,6 +94,11 @@ namespace sleet
 
     namespace _impl
     {
+        /// A non-owning id lookup for a widget tree. Keys are views into node
+        /// ids, so an index is only valid while its tree stays in place.
+        using node_index = std::unordered_map<std::string_view, widget::node_data *>;
+
+
         /// \c kei::runtime_policy requires \c init() to be \c noexcept, but
         /// formatting an error message allocates. If that allocation fails while
         /// reporting a failed initialization, there is nowhere left to report it.
@@ -431,16 +435,27 @@ namespace sleet
                                         const std::optional<widget::widget_id> &hovered,
                                         const std::optional<widget::widget_id> &pressed,
                                         const std::optional<widget::widget_id> &focused,
-                                        bool                                    show_focus)
+                                        bool                                    show_focus,
+                                        const node_index                       *index = nullptr)
             -> std::unordered_map<widget::widget_id, interaction_progress>
         {
             auto output = std::unordered_map<widget::widget_id, interaction_progress> {};
 
-            if (hovered and root.find(*hovered) != nullptr) output[*hovered].hover = 1.F;
-            if (pressed and root.find(*pressed) != nullptr) output[*pressed].press = 1.F;
+            const auto exists = [&](const widget::widget_id &id)
+            {
+                if (index != nullptr)
+                {
+                    const auto it = index->find(id.view());
+                    return it != index->end() and it->second != nullptr;
+                }
 
-            if (show_focus and focused and root.find(*focused) != nullptr)
-                output[*focused].focus = 1.F;
+                return root.find(id) != nullptr;
+            };
+
+            if (hovered and exists(*hovered)) output[*hovered].hover = 1.F;
+            if (pressed and exists(*pressed)) output[*pressed].press = 1.F;
+
+            if (show_focus and focused and exists(*focused)) output[*focused].focus = 1.F;
 
             return output;
         }
@@ -566,6 +581,8 @@ namespace sleet
             return *this;
         }
 
+        /// Replaces the theme. Call from an update callback or the event-loop
+        /// thread; the application is not thread-safe.
         void set_theme(widget::theme theme)
         {
             // Apply immediately when the loop is running; otherwise the new
@@ -586,6 +603,9 @@ namespace sleet
         /// Turns easing off when \p value is true. Reduced motion snaps every
         /// transition to its target, which is useful for accessibility and for
         /// deterministic screenshots.
+        ///
+        /// Call from an update callback or the event-loop thread; the
+        /// application is not thread-safe.
         void set_reduced_motion(bool value = true) noexcept { m_reduced_motion = value; }
 
 
@@ -606,7 +626,8 @@ namespace sleet
             m_redraw_requested = true;
         }
 
-        /// Removes every active toast immediately.
+        /// Removes every active toast immediately. Call from the event-loop
+        /// thread, like \c notify.
         void clear_toasts()
         {
             if (m_toasts.empty()) return;
@@ -648,8 +669,10 @@ namespace sleet
 
         render_context *m_context = nullptr;
 
-        /// Set by set_theme so the loop repaints even when no input arrives.
-        std::atomic<bool> m_redraw_requested { false };
+        /// Set by set_theme and notify so the loop repaints even when no
+        /// input arrives. The application is single-threaded: callbacks and
+        /// setters run on the event-loop thread.
+        bool m_redraw_requested = false;
 
         /// Disables easing globally, for accessibility settings.
         bool m_reduced_motion = false;
@@ -677,6 +700,11 @@ namespace sleet
         subscription_fn m_subscription;
 
 
+        /// Maps ids to nodes without copying them. The views point into the
+        /// tree, so the index is rebuilt whenever the tree is replaced.
+        using node_index = _impl::node_index;
+
+
         struct session
         {
             struct edit_snapshot
@@ -691,6 +719,7 @@ namespace sleet
             std::deque<Message>                  messages;
             std::optional<widget::node_data>     tree;
             std::optional<widget::layout_result> layout;
+            node_index                           nodes;
             std::optional<widget::widget_id>     hovered;
             std::optional<widget::widget_id>     pointer_target;
             std::optional<widget::widget_id>     pressed;
@@ -778,6 +807,41 @@ namespace sleet
         }
 
 
+        static void index_nodes(widget::node_data &node, node_index &out)
+        {
+            out.emplace(node.id.view(), &node);
+            for (auto &child : node.children) index_nodes(child, out);
+        }
+
+
+        /// Rebuilds the id lookup. The tree must already live in its final
+        /// location because the index stores views into its ids.
+        static void rebuild_node_index(session &current)
+        {
+            current.nodes.clear();
+            if (!current.tree) return;
+
+            current.nodes.reserve(current.tree->children_amount() + 1);
+            index_nodes(*current.tree, current.nodes);
+        }
+
+
+        [[nodiscard]]
+        static auto find_node(session &current, const widget::widget_id &id) -> widget::node_data *
+        {
+            if (!current.tree) return nullptr;
+
+            if (const auto it = current.nodes.find(id.view()); it != current.nodes.end())
+                return it->second;
+
+            // A non-empty index covers the whole tree, so a miss means the id
+            // is gone. Only walk when the tree was never indexed.
+            if (!current.nodes.empty()) return nullptr;
+
+            return current.tree->find(id);
+        }
+
+
         /// Physical output pixels per logical window point.
         [[nodiscard]]
         auto pixel_scale() const noexcept -> float
@@ -814,8 +878,7 @@ namespace sleet
         /// keyboard and IME candidates even when no field is active.
         void sync_text_input(session &current)
         {
-            const auto *focused
-                = current.tree and current.focused ? current.tree->find(*current.focused) : nullptr;
+            const auto *focused = current.focused ? find_node(current, *current.focused) : nullptr;
 
             const auto should_enable = focused != nullptr
                                    and focused->control == widget::control_kind::text_input
@@ -861,8 +924,8 @@ namespace sleet
         [[nodiscard]]
         auto focused_node(session &current) const -> widget::node_data *
         {
-            if (!current.tree or !current.focused) return nullptr;
-            return current.tree->find(*current.focused);
+            if (!current.focused) return nullptr;
+            return find_node(current, *current.focused);
         }
 
 
@@ -985,7 +1048,7 @@ namespace sleet
                 return;
             }
 
-            const auto *node = current.tree->find(*current.pointer_target);
+            const auto *node = find_node(current, *current.pointer_target);
             if (node == nullptr)
             {
                 // The hovered widget disappeared when the view was rebuilt.
@@ -1181,7 +1244,7 @@ namespace sleet
 
                 if (current.modal_return_focus)
                 {
-                    auto *previous = root.find(*current.modal_return_focus);
+                    auto *previous = find_node(current, *current.modal_return_focus);
                     if (previous != nullptr and previous->focusable
                         and _impl::effectively_visible(*previous))
                         focus_node(current, *previous);
@@ -1209,7 +1272,7 @@ namespace sleet
             }
 
             if (current.focused)
-                if (const auto *focused = root.find(*current.focused);
+                if (const auto *focused = find_node(current, *current.focused);
                     focused != nullptr and _impl::inside_subtree(*focused, *modal))
                     return;
 
@@ -1252,7 +1315,7 @@ namespace sleet
         {
             for (auto it = current.open_combos.begin(); it != current.open_combos.end();)
             {
-                const auto *node = root.find(*it);
+                const auto *node = find_node(current, *it);
                 if (node == nullptr or node->control != widget::control_kind::combo_box
                     or !_impl::effectively_visible(*node))
                     it = current.open_combos.erase(it);
@@ -1264,7 +1327,7 @@ namespace sleet
 
             for (auto it = current.edits.begin(); it != current.edits.end();)
             {
-                const auto *node = root.find(it->first);
+                const auto *node = find_node(current, it->first);
                 if (node == nullptr or node->control != widget::control_kind::text_input)
                 {
                     it = current.edits.erase(it);
@@ -1277,9 +1340,9 @@ namespace sleet
                 ++it;
             }
 
-            const auto is_text_input = [&root](const widget::widget_id &id)
+            const auto is_text_input = [&current](const widget::widget_id &id)
             {
-                const auto *node = root.find(id);
+                const auto *node = find_node(current, id);
                 return node != nullptr and node->control == widget::control_kind::text_input;
             };
 
@@ -1297,7 +1360,7 @@ namespace sleet
 
             for (auto it = current.scrolls.begin(); it != current.scrolls.end();)
             {
-                const auto *node = root.find(it->first);
+                const auto *node = find_node(current, it->first);
                 if (node == nullptr or !node->scrollable)
                     it = current.scrolls.erase(it);
                 else
@@ -1306,7 +1369,7 @@ namespace sleet
 
             for (auto it = current.scroll_targets.begin(); it != current.scroll_targets.end();)
             {
-                const auto *node = root.find(it->first);
+                const auto *node = find_node(current, it->first);
                 if (node == nullptr or !node->scrollable)
                     it = current.scroll_targets.erase(it);
                 else
@@ -1315,7 +1378,7 @@ namespace sleet
 
             if (current.focused)
             {
-                const auto *node = root.find(*current.focused);
+                const auto *node = find_node(current, *current.focused);
                 if (node == nullptr or !node->focusable or !_impl::effectively_visible(*node))
                     current.focused.reset();
                 else if (node->control == widget::control_kind::text_input
@@ -1325,7 +1388,7 @@ namespace sleet
 
             if (current.selecting)
             {
-                const auto *node = root.find(*current.selecting);
+                const auto *node = find_node(current, *current.selecting);
                 if (node == nullptr or node->control != widget::control_kind::text_input
                     or !_impl::effectively_visible(*node))
                     current.selecting.reset();
@@ -1333,13 +1396,13 @@ namespace sleet
 
             if (current.hovered)
             {
-                const auto *node = root.find(*current.hovered);
+                const auto *node = find_node(current, *current.hovered);
                 if (node == nullptr or !_impl::effectively_visible(*node)) current.hovered.reset();
             }
 
             if (current.pressed)
             {
-                const auto *node = root.find(*current.pressed);
+                const auto *node = find_node(current, *current.pressed);
                 if (node == nullptr or !_impl::effectively_visible(*node))
                 {
                     current.pressed.reset();
@@ -1349,7 +1412,7 @@ namespace sleet
 
             if (current.dragging)
             {
-                const auto *node = root.find(*current.dragging);
+                const auto *node = find_node(current, *current.dragging);
                 if (node == nullptr or node->control != widget::control_kind::slider
                     or !_impl::effectively_visible(*node))
                     current.dragging.reset();
@@ -1357,7 +1420,7 @@ namespace sleet
 
             if (current.preedit_id)
             {
-                const auto *node = root.find(*current.preedit_id);
+                const auto *node = find_node(current, *current.preedit_id);
                 if (node == nullptr or node->control != widget::control_kind::text_input
                     or !_impl::effectively_visible(*node) or !current.focused
                     or *current.focused != *current.preedit_id)
@@ -2620,14 +2683,23 @@ namespace sleet
                              std::unordered_map<widget::widget_id, interaction_progress> &output)
             -> bool
         {
-            const auto *focused = current.focused ? root.find(*current.focused) : nullptr;
+            const auto *focused = current.focused ? find_node(current, *current.focused) : nullptr;
             const auto  show_focus
                 = focused != nullptr
                && (current.focus_visible or focused->control == widget::control_kind::text_input);
 
+            // With no transitions and no pointer or focus target there is
+            // nothing to animate or prune. Skip walking the whole tree.
+            if (current.interactions.empty() and !current.hovered and !current.pressed
+                and !(show_focus and current.focused))
+            {
+                output.clear();
+                return false;
+            }
+
             // Focus is drawn only on the focused widget, never its ancestors.
             output = _impl::interaction_targets(root, current.hovered, current.pressed,
-                                                current.focused, show_focus);
+                                                current.focused, show_focus, &current.nodes);
 
             auto active = false;
 
@@ -2757,18 +2829,25 @@ namespace sleet
                 return false;
             }
 
-            sync_controls(current, *next_tree);
-            enforce_modal_focus(current, *next_tree);
+            // The id index stores views into node ids, so the tree must be in
+            // its final location before it is built. Keeping one index per
+            // tree makes lookups constant-time instead of walking the tree.
+            current.nodes.clear();
+            current.tree = std::move(*next_tree);
+            rebuild_node_index(current);
 
-            auto next_layout = calculate_layout(
-                *next_tree, measure, { static_cast<float>(m_width), static_cast<float>(m_height) });
+            sync_controls(current, *current.tree);
+            enforce_modal_focus(current, *current.tree);
+
+            auto next_layout
+                = calculate_layout(*current.tree, measure,
+                                   { static_cast<float>(m_width), static_cast<float>(m_height) });
             if (!next_layout)
             {
                 std::println(stderr, "sleet: layout failed: {}", next_layout.error().what());
                 return false;
             }
 
-            current.tree         = std::move(*next_tree);
             current.layout       = std::move(*next_layout);
             current.view_dirty   = false;
             current.layout_dirty = false;
@@ -2835,7 +2914,7 @@ namespace sleet
             context.set_toasts(build_toasts());
 
             const auto *focused_node_ptr
-                = current.focused ? current.tree->find(*current.focused) : nullptr;
+                = current.focused ? find_node(current, *current.focused) : nullptr;
 
             // Keyboard focus rings are focus-visible; pointer focus on a text
             // input still shows its caret and border.
@@ -2922,7 +3001,11 @@ namespace sleet
 
                 // Themes can change font metrics, and toasts only need a
                 // repaint. Re-measuring is cheap and keeps both correct.
-                if (m_redraw_requested.exchange(false)) mark_layout_dirty(current);
+                if (m_redraw_requested)
+                {
+                    m_redraw_requested = false;
+                    mark_layout_dirty(current);
+                }
 
                 const auto now     = SDL_GetTicks();
                 const auto elapsed = static_cast<float>(now - last_tick) / 1000.F;

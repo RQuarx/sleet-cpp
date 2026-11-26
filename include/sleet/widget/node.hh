@@ -229,7 +229,7 @@ namespace sleet::widget
         [[nodiscard]] auto is_disabled() const noexcept -> bool { return disabled; }
 
     private:
-        auto finalize_impl(std::unordered_set<std::string> &seen, std::string_view parent_path)
+        auto finalize_impl(std::unordered_set<std::string_view> &seen, std::string_view parent_path)
             -> kei::result<>;
     };
 

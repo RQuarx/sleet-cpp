@@ -201,14 +201,16 @@ auto node_data::operator[](std::string_view key) const -> const node_data &
 
 auto node_data::finalize(std::string_view parent_path) -> kei::result<>
 {
-    std::unordered_set<std::string> seen;
+    // Ids are assigned before they are inserted and never move afterwards, so
+    // the duplicate check can view them instead of copying every id.
+    std::unordered_set<std::string_view> seen;
     seen.reserve(children_amount() + 1);
     return finalize_impl(seen, parent_path);
 }
 
 
-auto node_data::finalize_impl(std::unordered_set<std::string> &seen, std::string_view parent_path)
-    -> kei::result<>
+auto node_data::finalize_impl(std::unordered_set<std::string_view> &seen,
+                              std::string_view                      parent_path) -> kei::result<>
 {
     if (id.empty())
     {
@@ -218,7 +220,7 @@ auto node_data::finalize_impl(std::unordered_set<std::string> &seen, std::string
             id = widget_id { std::format("{}/{}", parent_path, generated_base(*this)) };
     }
 
-    if (!seen.insert(id.str()).second)
+    if (!seen.insert(id.view()).second)
         return sleet::error { "Duplicate widget id \"{}\".", id.view() }.unexpected();
 
     // Occurrence numbers are scoped to one parent and one call site. Widgets
