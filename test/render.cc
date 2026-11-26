@@ -61,6 +61,8 @@ const boost::ut::suite render_tests = []
         }
 
         const auto clear_color = theme.base.bg.value_or(sleet::color { 0, 0, 0, 255 });
+        const auto base_bg     = theme.base.bg.value();
+        const auto hover_bg    = theme.hover.bg.value();
 
         try
         {
@@ -209,6 +211,43 @@ const boost::ut::suite render_tests = []
                         SDL_DestroySurface(pixels);
                     }
                 }
+            }
+
+            // Eased interaction progress blends hover feedback instead of
+            // switching colors instantly.
+            context.set_viewport({ 64.F, 64.F });
+
+            auto animated_button = to_data(button("Go", "go") | id("animated") | width(80.F));
+            expect(static_cast<bool>(animated_button.finalize()));
+
+            auto animated_layout = calculate_layout(animated_button, measure, { 64.F, 64.F });
+            expect(static_cast<bool>(animated_layout));
+            if (animated_layout)
+            {
+                context.set_interaction_progress({
+                    { widget_id { "animated" }, sleet::interaction_progress { .hover = 0.5F } }
+                });
+
+                expect(static_cast<bool>(context.render(animated_button, *animated_layout)));
+
+                auto *pixels = SDL_RenderReadPixels(renderer, nullptr);
+                expect(pixels != nullptr);
+                if (pixels != nullptr)
+                {
+                    std::uint8_t r = 0;
+                    std::uint8_t g = 0;
+                    std::uint8_t b = 0;
+                    std::uint8_t a = 0;
+                    expect(SDL_ReadSurfacePixel(pixels, 10, 10, &r, &g, &b, &a));
+
+                    const auto expected = base_bg.lerp(hover_bg, 0.5F);
+                    expect(r == expected.r);
+                    expect(g == expected.g);
+                    expect(b == expected.b);
+                    SDL_DestroySurface(pixels);
+                }
+
+                context.set_interaction_progress({});
             }
 
             // Floating content is painted above normal flow, even when it

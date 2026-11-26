@@ -29,16 +29,6 @@ namespace
 
 
     [[nodiscard]]
-    auto merge_colors(const colors &over, const colors &under) noexcept -> colors
-    {
-        return {
-            .bg = over.bg ? over.bg : under.bg,
-            .fg = over.fg ? over.fg : under.fg,
-        };
-    }
-
-
-    [[nodiscard]]
     auto to_sdl_rect(const rect &value) noexcept -> SDL_Rect
     {
         return {
@@ -425,6 +415,11 @@ struct sleet::render_context::impl
     std::optional<widget::widget_id> editing;
     widget::text_selection           selection;
 
+    /// Eased interaction progress supplied by the runtime. Empty until the
+    /// runtime sets it; the renderer then falls back to binary hover/press.
+    std::unordered_map<widget::widget_id, interaction_progress> progress;
+    bool                                                        has_progress = false;
+
     std::optional<widget::widget_id> preedit_id;
     std::string                      preedit_text;
     std::size_t                      preedit_caret = 0;
@@ -534,6 +529,48 @@ struct sleet::render_context::impl
 
 
     [[nodiscard]]
+    auto amounts_for(const node_data &node) const noexcept -> interaction_progress
+    {
+        if (has_progress)
+        {
+            const auto it = progress.find(node.id);
+            return it == progress.end() ? interaction_progress {} : it->second;
+        }
+
+        interaction_progress result;
+        if (is_hovered(node)) result.hover = 1.F;
+        if (is_pressed(node)) result.press = 1.F;
+        if (focused and *focused == node.id) result.focus = 1.F;
+        return result;
+    }
+
+
+    [[nodiscard]]
+    static auto fade(color value, float amount) noexcept -> color
+    {
+        value.a = static_cast<std::uint8_t>(
+            std::lround(static_cast<float>(value.a) * std::clamp(amount, 0.F, 1.F)));
+        return value;
+    }
+
+
+    [[nodiscard]]
+    static auto blend_colors(const colors &over, const colors &under, float amount) noexcept
+        -> colors
+    {
+        const auto blend = [amount](const std::optional<color> &top,
+                                    const std::optional<color> &bottom) -> std::optional<color>
+        {
+            if (!top) return bottom;
+            if (!bottom) return fade(*top, amount);
+            return bottom->lerp(*top, amount);
+        };
+
+        return { blend(over.bg, under.bg), blend(over.fg, under.fg) };
+    }
+
+
+    [[nodiscard]]
     auto is_disabled(const node_data &node) const noexcept -> bool
     {
         for (const auto *current = &node; current != nullptr; current = current->parent)
@@ -585,10 +622,11 @@ struct sleet::render_context::impl
     [[nodiscard]]
     auto active_colors(const node_data &node) const noexcept -> colors
     {
-        auto result = theme.base;
+        auto       result  = theme.base;
+        const auto amounts = amounts_for(node);
 
-        if (is_hovered(node)) result = merge_colors(theme.hover, result);
-        if (is_pressed(node)) result = merge_colors(theme.clicked, result);
+        if (amounts.hover > 0.F) result = blend_colors(theme.hover, result, amounts.hover);
+        if (amounts.press > 0.F) result = blend_colors(theme.clicked, result, amounts.press);
 
         return result;
     }
@@ -862,8 +900,11 @@ struct sleet::render_context::impl
 
         // Accent and danger surfaces need their own hover/pressed feedback;
         // the generic base colors would turn them gray.
-        if (is_pressed(node)) return mix(*result, color { 0, 0, 0, 255 }, 0.18F);
-        if (is_hovered(node)) return mix(*result, color { 255, 255, 255, 255 }, 0.12F);
+        const auto amounts = amounts_for(node);
+        if (amounts.press > 0.F)
+            *result = mix(*result, color { 0, 0, 0, 255 }, 0.18F * amounts.press);
+        if (amounts.hover > 0.F)
+            *result = mix(*result, color { 255, 255, 255, 255 }, 0.12F * amounts.hover);
         return result;
     }
 
@@ -871,18 +912,33 @@ struct sleet::render_context::impl
     [[nodiscard]]
     auto control_background(const node_data &node) const noexcept -> std::optional<color>
     {
+        const auto amounts = amounts_for(node);
+
         switch (node.control)
         {
         case widget::control_kind::text_input:
         case widget::control_kind::combo_box:
-            if (is_hovered(node) or is_pressed(node))
-                return theme.hover.bg ? theme.hover.bg : theme.field.bg;
-            return theme.field.bg;
+            {
+                const auto normal = theme.field.bg;
+                if (theme.hover.bg and (amounts.hover > 0.F or amounts.press > 0.F))
+                {
+                    if (!normal)
+                        return fade(*theme.hover.bg, std::max(amounts.hover, amounts.press));
+                    return normal->lerp(*theme.hover.bg, std::max(amounts.hover, amounts.press));
+                }
+                return normal;
+            }
         case widget::control_kind::combo_popup: return theme.base.bg;
         case widget::control_kind::combo_option:
-            if (is_pressed(node)) return theme.clicked.bg;
-            if (is_hovered(node)) return theme.hover.bg;
-            return theme.field.bg ? theme.field.bg : theme.base.bg;
+            {
+                auto normal = theme.field.bg ? theme.field.bg : theme.base.bg;
+                if (!normal) return std::nullopt;
+                if (amounts.press > 0.F and theme.clicked.bg)
+                    normal = normal->lerp(*theme.clicked.bg, amounts.press);
+                if (amounts.hover > 0.F and theme.hover.bg)
+                    normal = normal->lerp(*theme.hover.bg, amounts.hover);
+                return normal;
+            }
         case widget::control_kind::checkbox_indicator:
         case widget::control_kind::radio_indicator:
             return node.checked ? theme.accent : theme.field.bg;
@@ -905,8 +961,10 @@ struct sleet::render_context::impl
         // A ghost button stays transparent except while hovered or pressed.
         if (node.variant == widget::button_variant::ghost)
         {
-            if (is_pressed(node)) return theme.clicked.bg;
-            if (is_hovered(node)) return theme.hover.bg;
+            const auto amounts = amounts_for(node);
+            if (amounts.press > 0.F and theme.clicked.bg)
+                return fade(*theme.clicked.bg, amounts.press);
+            if (amounts.hover > 0.F and theme.hover.bg) return fade(*theme.hover.bg, amounts.hover);
             return std::nullopt;
         }
 
@@ -947,24 +1005,31 @@ struct sleet::render_context::impl
 
         // Sliders draw their own focus ring around the thumb.
         if (node.control == widget::control_kind::slider) return std::nullopt;
-        if (focused and *focused == node.id) return theme.focus;
+
+        std::optional<color> normal;
 
         switch (node.control)
         {
         case widget::control_kind::text_input:
         case widget::control_kind::combo_box:
-        case widget::control_kind::combo_popup:        return theme.border;
+        case widget::control_kind::combo_popup:        normal = theme.border; break;
         case widget::control_kind::checkbox_indicator:
         case widget::control_kind::radio_indicator:
-            return node.checked ? theme.accent : theme.border;
-        case widget::control_kind::combo_option: return std::nullopt;
+            normal = node.checked ? theme.accent : theme.border;
+            break;
+        case widget::control_kind::combo_option: break;
         case widget::control_kind::slider:
         case widget::control_kind::none:         break;
         }
 
-        if (node.variant == widget::button_variant::ghost) return std::nullopt;
-        if (!node.action.empty()) return theme.border;
-        return std::nullopt;
+        if (!normal and node.variant != widget::button_variant::ghost and !node.action.empty())
+            normal = theme.border;
+
+        const auto focus_amount = amounts_for(node).focus;
+        if (focus_amount <= 0.F or !theme.focus) return normal;
+
+        if (!normal) return fade(*theme.focus, focus_amount);
+        return normal->lerp(*theme.focus, focus_amount);
     }
 
 
@@ -980,8 +1045,9 @@ struct sleet::render_context::impl
     [[nodiscard]]
     auto border_width_for(const node_data &node) const noexcept -> float
     {
-        if (focused and *focused == node.id) return 2.F;
-        return node.visual.border_width;
+        const auto base   = node.visual.border_width;
+        const auto amount = amounts_for(node).focus;
+        return base + ((2.F - base) * amount);
     }
 
 
@@ -1414,10 +1480,12 @@ struct sleet::render_context::impl
         auto       fill_color  = mute(theme.accent.value_or(track_color));
         const auto thumb_color = mute(theme.accent_fg.value_or(color { 255, 255, 255, 255 }));
 
-        if (!disabled and (is_hovered(node) or is_pressed(node)))
+        const auto amounts = amounts_for(node);
+        if (!disabled and (amounts.hover > 0.F or amounts.press > 0.F))
         {
-            if (theme.hover.bg) track_color = mix(track_color, *theme.hover.bg, 0.5F);
-            fill_color = mix(fill_color, color { 255, 255, 255, 255 }, 0.08F);
+            if (theme.hover.bg)
+                track_color = mix(track_color, *theme.hover.bg, 0.5F * amounts.hover);
+            fill_color = mix(fill_color, color { 255, 255, 255, 255 }, 0.08F * amounts.press);
         }
 
         const auto border_color
@@ -1474,11 +1542,12 @@ struct sleet::render_context::impl
             !res)
             return res;
 
-        if (!disabled and focused and *focused == node.id)
+        if (!disabled and amounts.focus > 0.F)
         {
-            const auto ring = thumb.inset(sleet::math::edge_insets { -2.F * scale });
-            if (auto res = border_rounded(renderer, ring, thumb_radius + (2.F * scale),
-                                          theme.focus.value_or(fill_color), 2.F * scale);
+            const auto ring       = thumb.inset(sleet::math::edge_insets { -2.F * scale });
+            const auto ring_color = fade(theme.focus.value_or(fill_color), amounts.focus);
+            if (auto res = border_rounded(renderer, ring, thumb_radius + (2.F * scale), ring_color,
+                                          2.F * scale);
                 !res)
                 return res;
         }
@@ -1712,6 +1781,13 @@ void sleet::render_context::set_hovered(std::optional<widget::widget_id> id) noe
 
 void sleet::render_context::set_pressed(std::optional<widget::widget_id> id) noexcept
 { m_impl->pressed = std::move(id); }
+
+void sleet::render_context::set_interaction_progress(
+    std::unordered_map<widget::widget_id, interaction_progress> progress) noexcept
+{
+    m_impl->progress     = std::move(progress);
+    m_impl->has_progress = true;
+}
 
 void sleet::render_context::set_focused(std::optional<widget::widget_id> id) noexcept
 { m_impl->focused = std::move(id); }

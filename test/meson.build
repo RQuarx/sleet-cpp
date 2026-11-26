@@ -2,6 +2,7 @@ test_dependencies = [ dependency('sleet'), dependency('boost.ut') ]
 
 tests = {
   'application':   'application.cc',
+  'animation':     'animation.cc',
   'line-breaking': 'line-breaking.cc',
   'ustring':       'ustring.cc',
   'color':         'color.cc',

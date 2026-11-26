@@ -19,6 +19,7 @@
 #include "sleet/error.hh"
 #include "sleet/math/edge_insets.hh"
 #include "sleet/math/vec2.hh"
+#include "sleet/widget/animation.hh"
 #include "sleet/widget/control.hh"
 #include "sleet/widget/id.hh"
 #include "sleet/widget/style.hh"
@@ -101,6 +102,10 @@ namespace sleet::widget
         node_kind kind = node_kind::box;
         style     visual;
         bool      visible = true;
+
+        /// Eases interactive feedback and explicit style changes over time.
+        /// A zero duration keeps the widget instant.
+        transition_spec motion;
 
         /// Floating nodes are taken out of the parent's flow, positioned
         /// against \c placement_anchor inside the parent's content box, and

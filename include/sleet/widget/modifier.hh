@@ -394,4 +394,29 @@ namespace sleet::widget
         return _impl::make_modifier([value = std::move(value)](node_data &data)
                                     { data.placeholder = value; });
     }
+
+
+    /// Eases interactive feedback and explicit style changes over \p duration
+    /// seconds. A zero duration makes the widget instant.
+    [[nodiscard]]
+    inline auto transition(float duration, easing curve = easing::ease_out)
+    {
+        return _impl::make_modifier(
+            [duration, curve](node_data &data)
+            {
+                data.motion.duration = std::isfinite(duration) ? std::max(0.F, duration) : 0.F;
+                data.motion.curve    = curve;
+            });
+    }
+
+    [[nodiscard]]
+    inline auto transition(transition_spec spec)
+    {
+        return _impl::make_modifier([spec](node_data &data) { data.motion = spec; });
+    }
+
+    /// Removes any inherited transition from this widget.
+    [[nodiscard]]
+    inline auto no_transition()
+    { return transition(0.F); }
 }

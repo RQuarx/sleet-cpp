@@ -46,7 +46,7 @@ namespace
 
         auto header = box(origin)[std::move(header_content)] | padding(8.F, 10.F) | height(36.F)
                     | width(sizing::fill()) | control(control_kind::combo_box) | focusable()
-                    | on_click(action) | text_of(value);
+                    | on_click(action) | text_of(value) | transition(0.12F);
 
         auto result = column(origin);
         result     |= width(sizing::fill());
@@ -62,7 +62,8 @@ namespace
         for (std::size_t i = 0; i < options.size(); i++)
         {
             auto option = option_label(options[i], origin) | control(control_kind::combo_option)
-                        | focusable() | on_click(action) | text_of(options[i]) | radius(4.F);
+                        | focusable() | on_click(action) | text_of(options[i]) | radius(4.F)
+                        | transition(0.08F);
 
             if (option_ids != nullptr and i < option_ids->size()) option |= key((*option_ids)[i]);
 
@@ -101,7 +102,7 @@ auto sleet::widget::button(std::string          text,
 
     return box(origin)[std::move(content)] | padding(8.F, 14.F) | height(36.F)
          | halign(align::center) | valign(align::center) | on_click(std::move(action)) | focusable()
-         | variant(appearance);
+         | variant(appearance) | transition(0.12F);
 }
 
 
@@ -112,7 +113,7 @@ auto sleet::widget::button(node_data            content,
 {
     return box(origin)[std::move(content)] | padding(8.F, 14.F) | height(36.F)
          | halign(align::center) | valign(align::center) | on_click(std::move(action)) | focusable()
-         | variant(appearance);
+         | variant(appearance) | transition(0.12F);
 }
 
 
@@ -123,7 +124,7 @@ auto sleet::widget::text_input(std::string          value,
 {
     return label_node { std::move(value), origin } | padding(8.F, 10.F) | width(sizing::fill())
          | height(36.F) | control(control_kind::text_input) | focusable()
-         | on_click(std::move(action)) | placeholder(std::move(hint));
+         | on_click(std::move(action)) | placeholder(std::move(hint)) | transition(0.12F);
 }
 
 
@@ -161,7 +162,7 @@ auto sleet::widget::checkbox(std::string          text,
         | gap(8.F) | valign(align::center);
 
     return box(origin)[std::move(content)] | padding(4.F) | halign(align::start)
-         | valign(align::center) | on_click(std::move(action)) | focusable();
+         | valign(align::center) | on_click(std::move(action)) | focusable() | transition(0.12F);
 }
 
 
@@ -180,7 +181,7 @@ auto sleet::widget::toggle(std::string          text,
         | gap(8.F) | valign(align::center);
 
     return box(origin)[std::move(content)] | padding(4.F) | halign(align::start)
-         | valign(align::center) | on_click(std::move(action)) | focusable();
+         | valign(align::center) | on_click(std::move(action)) | focusable() | transition(0.12F);
 }
 
 
@@ -194,7 +195,7 @@ auto sleet::widget::radio_button(std::string          text,
                  | gap(8.F) | valign(align::center);
 
     return box(origin)[std::move(content)] | padding(4.F) | halign(align::start)
-         | valign(align::center) | on_click(std::move(action)) | focusable();
+         | valign(align::center) | on_click(std::move(action)) | focusable() | transition(0.12F);
 }
 
 
@@ -206,7 +207,7 @@ auto sleet::widget::slider(float value, std::string action, std::source_location
     // The renderer draws the track, fill, and thumb from the control value, so
     // the slider stays one clean shape instead of three adjacent boxes.
     return box(origin) | width(sizing::fill()) | height(20.F) | control(control_kind::slider)
-         | focusable() | on_click(std::move(action)) | control_value(value);
+         | focusable() | on_click(std::move(action)) | control_value(value) | transition(0.12F);
 }
 
 

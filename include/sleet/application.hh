@@ -25,6 +25,7 @@
 #include <SDL3/SDL_keycode.h>
 #include <SDL3/SDL_mouse.h>
 #include <SDL3/SDL_render.h>
+#include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_video.h>
 #include <SDL3_ttf/SDL_ttf.h>
 #include <kei-utils/runtime_guard.hh>
@@ -440,6 +441,11 @@ namespace sleet
             m_redraw_requested = true;
         }
 
+        /// Turns easing off when \p value is true. Reduced motion snaps every
+        /// transition to its target, which is useful for accessibility and for
+        /// deterministic screenshots.
+        void set_reduced_motion(bool value = true) noexcept { m_reduced_motion = value; }
+
 
         auto run() -> int
         {
@@ -472,6 +478,9 @@ namespace sleet
 
         /// Set by set_theme so the loop repaints even when no input arrives.
         std::atomic<bool> m_redraw_requested { false };
+
+        /// Disables easing globally, for accessibility settings.
+        bool m_reduced_motion = false;
 
         /// Whether SDL text input is currently enabled for the window.
         bool m_text_input_active = false;
@@ -519,6 +528,18 @@ namespace sleet
             std::optional<widget::widget_id> preedit_id;
             std::string                      preedit_text;
             std::size_t                      preedit_caret = 0;
+
+            /// Eased hover, press, and focus progress keyed by widget id.
+            struct interaction_animation
+            {
+                widget::animated_value  hover;
+                widget::animated_value  press;
+                widget::animated_value  focus;
+                widget::transition_spec spec;
+                bool                    initialized = false;
+            };
+
+            std::unordered_map<widget::widget_id, interaction_animation> interactions;
 
             bool press_active   = false;
             bool focus_visible  = false;
@@ -2016,8 +2037,99 @@ namespace sleet
         }
 
 
+        /// Advances eased interaction feedback and builds the progress map the
+        /// renderer uses to blend hover, press, and focus states.
+        /// \return \c true while at least one transition is still moving.
+        auto
+        advance_interactions(session                 &current,
+                             const widget::node_data &root,
+                             float                    delta_seconds,
+                             std::unordered_map<widget::widget_id, interaction_progress> &output)
+            -> bool
+        {
+            output.clear();
+
+            // A state applies to the target and all of its ancestors, matching
+            // the renderer's inherited hover and press feedback.
+            const auto mark =
+                [&](const std::optional<widget::widget_id> &id, float interaction_progress::*member)
+            {
+                if (!id) return;
+
+                const auto *node = root.find(*id);
+                for (const auto *cursor = node; cursor != nullptr; cursor = cursor->parent)
+                    (output[cursor->id].*member) = 1.F;
+            };
+
+            mark(current.hovered, &interaction_progress::hover);
+            mark(current.pressed, &interaction_progress::press);
+
+            const auto *focused = current.focused ? root.find(*current.focused) : nullptr;
+            const auto  show_focus
+                = focused != nullptr
+               && (current.focus_visible or focused->control == widget::control_kind::text_input);
+            if (show_focus) mark(current.focused, &interaction_progress::focus);
+
+            auto active = false;
+
+            const auto visit = [&](const widget::node_data &node, auto &&self) -> void
+            {
+                if (node.motion.duration <= 0.F) { current.interactions.erase(node.id); }
+                else
+                {
+                    auto &animation = current.interactions[node.id];
+                    animation.spec  = node.motion;
+
+                    const auto target
+                        = output.contains(node.id) ? output[node.id] : interaction_progress {};
+
+                    if (!animation.initialized)
+                    {
+                        animation.hover.snap(target.hover);
+                        animation.press.snap(target.press);
+                        animation.focus.snap(target.focus);
+                        animation.initialized = true;
+                    }
+
+                    animation.hover.set_target(target.hover);
+                    animation.press.set_target(target.press);
+                    animation.focus.set_target(target.focus);
+
+                    const auto duration = m_reduced_motion ? 0.F : animation.spec.duration;
+                    active
+                        |= animation.hover.advance(delta_seconds, duration, animation.spec.curve);
+                    active
+                        |= animation.press.advance(delta_seconds, duration, animation.spec.curve);
+                    active
+                        |= animation.focus.advance(delta_seconds, duration, animation.spec.curve);
+
+                    output[node.id] = {
+                        animation.hover.current(),
+                        animation.press.current(),
+                        animation.focus.current(),
+                    };
+                }
+
+                for (const auto &child : node.children) self(child, self);
+            };
+
+            visit(root, visit);
+
+            for (auto it = current.interactions.begin(); it != current.interactions.end();)
+                if (root.find(it->first) == nullptr)
+                    it = current.interactions.erase(it);
+                else
+                    ++it;
+
+            return active;
+        }
+
+
         template <typename Measure>
-        auto refresh(session &current, render_context &context, const Measure &measure) -> bool
+        auto refresh(session        &current,
+                     render_context &context,
+                     const Measure  &measure,
+                     float           delta_seconds) -> bool
         {
             auto next_tree = m_view(current.state);
             if (!next_tree)
@@ -2048,8 +2160,13 @@ namespace sleet
             apply_scroll_offsets(current, *current.tree, *current.layout);
             sync_text_input(current);
 
+            auto       progress = std::unordered_map<widget::widget_id, interaction_progress> {};
+            const auto animating
+                = advance_interactions(current, *current.tree, delta_seconds, progress);
+
             context.set_hovered(current.hovered);
             context.set_pressed(current.pressed);
+            context.set_interaction_progress(std::move(progress));
 
             const auto *focused_node_ptr
                 = current.focused ? current.tree->find(*current.focused) : nullptr;
@@ -2092,7 +2209,7 @@ namespace sleet
                 return false;
             }
 
-            current.dirty = false;
+            current.dirty = animating;
             return true;
         }
 
@@ -2128,6 +2245,8 @@ namespace sleet
                                             std::optional<float> width_limit)
             { return context.measure_text(text, font, width_limit); };
 
+            auto last_tick = SDL_GetTicks();
+
             while (true)
             {
                 if (!pump_messages(current)) return 1;
@@ -2137,7 +2256,12 @@ namespace sleet
 
                 if (m_redraw_requested.exchange(false)) current.dirty = true;
 
-                if (current.dirty and !refresh(current, context, measure)) return 1;
+                const auto now     = SDL_GetTicks();
+                const auto elapsed = static_cast<float>(now - last_tick) / 1000.F;
+                last_tick          = now;
+                const auto delta   = std::clamp(elapsed, 0.F, 0.1F);
+
+                if (current.dirty and !refresh(current, context, measure, delta)) return 1;
 
                 SDL_Event native;
                 if (!SDL_PollEvent(&native))

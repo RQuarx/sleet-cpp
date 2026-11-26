@@ -14,6 +14,7 @@
 #include "sleet/text/ustring.hh"
 #include "sleet/text/wrap.hh"
 #include "sleet/traits.hh"
+#include "sleet/widget/animation.hh"
 #include "sleet/widget/id.hh"
 #include "sleet/widget/layout.hh"
 #include "sleet/widget/modifier.hh"

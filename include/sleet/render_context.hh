@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 #include <SDL3/SDL_render.h>
 
@@ -15,6 +16,16 @@
 
 namespace sleet
 {
+    /// The eased interaction state of one widget. Values are in \c [0, 1].
+    /// The runtime updates these while transitions are in flight.
+    struct interaction_progress
+    {
+        float hover = 0.F;
+        float press = 0.F;
+        float focus = 0.F;
+    };
+
+
     /// Owns the SDL renderer resources needed to draw a finalized widget tree:
     /// fonts, the text texture cache, and the active theme.
     ///
@@ -49,6 +60,12 @@ namespace sleet
         void set_theme(widget::theme theme);
         void set_hovered(std::optional<widget::widget_id> id) noexcept;
         void set_pressed(std::optional<widget::widget_id> id) noexcept;
+
+        /// Sets eased interaction progress per widget. When set, the renderer
+        /// blends hover, press, and focus feedback by these amounts instead of
+        /// switching instantly.
+        void set_interaction_progress(
+            std::unordered_map<widget::widget_id, interaction_progress> progress) noexcept;
 
         /// Sets the widget that owns keyboard focus. Focused widgets draw a
         /// focus-colored border.
