@@ -1936,6 +1936,82 @@ const boost::ut::suite overlay_tests = []
         expect(eq(observed.global, 2));
     };
 
+    "the deepest view shortcut wins and hidden panels fall back"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+            bool inner       = true;
+            int  outer_fires = 0;
+            int  inner_fires = 0;
+        };
+
+        struct message
+        { std::string action; };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto result
+            = app { "sleet-view-shortcut-depth-test", 320, 240, std::move(theme) }
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message {} }; })
+                  .on_update(
+                      [](state &current, const message &value) -> kei::result<>
+                      {
+                          if (value.action == "hide")
+                              current.inner = false;
+                          else if (value.action == "outer")
+                              current.outer_fires++;
+                          else if (value.action == "inner")
+                              current.inner_fires++;
+                          return {};
+                      })
+                  .on_view(
+                      [&observed](const state &current)
+                      {
+                          observed = current;
+
+                          auto view = column()[label("root")] | on_shortcut("F2", "outer");
+                          if (current.inner)
+                              view = view[box()[label("inner")] | on_shortcut("F2", "inner")];
+                          return view;
+                      })
+                  .on_event(
+                      [](const sleet::event &input) -> std::optional<message>
+                      {
+                          if (input.type == sleet::event::kind::key_down
+                              and !input.action.empty())
+                              return message { input.action };
+                          return std::nullopt;
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1:  push_key(SDLK_F2); break;
+                          case 2:  return message { "hide" };
+                          case 3:  push_key(SDLK_F2); break;
+                          case 4:  push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.inner_fires, 1));
+        expect(eq(observed.outer_fires, 1));
+    };
+
     "shortcut repeat is opt-in"_test = []
     {
         using namespace sleet::widget;
