@@ -84,14 +84,18 @@ namespace
         self.tint             = std::forward<Other>(other).tint;
         self.variant          = std::forward<Other>(other).variant;
         self.focusable        = std::forward<Other>(other).focusable;
+        self.autofocus        = std::forward<Other>(other).autofocus;
         self.checked          = std::forward<Other>(other).checked;
         self.control_value    = std::forward<Other>(other).control_value;
         self.placeholder      = std::forward<Other>(other).placeholder;
         self.tooltip_text     = std::forward<Other>(other).tooltip_text;
         self.backdrop         = std::forward<Other>(other).backdrop;
         self.focus_scope      = std::forward<Other>(other).focus_scope;
+        self.focus_group      = std::forward<Other>(other).focus_group;
         self.modal            = std::forward<Other>(other).modal;
         self.cancel_action    = std::forward<Other>(other).cancel_action;
+        self.shortcuts        = std::forward<Other>(other).shortcuts;
+        self.shortcut_error   = std::forward<Other>(other).shortcut_error;
         self.background_tint  = std::forward<Other>(other).background_tint;
         self.border_tint      = std::forward<Other>(other).border_tint;
     }
@@ -226,6 +230,9 @@ auto node_data::finalize_impl(std::unordered_set<std::string_view> &seen,
 
     if (!seen.insert(id.view()).second)
         return sleet::error { "Duplicate widget id \"{}\".", id.view() }.unexpected();
+
+    if (!shortcut_error.empty())
+        return sleet::error { "Widget \"{}\": {}.", id.view(), shortcut_error }.unexpected();
 
     // Occurrence numbers are scoped to one parent and one call site. Widgets
     // created in a loop are still distinguishable, but a widget from a

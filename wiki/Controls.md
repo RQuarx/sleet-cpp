@@ -75,6 +75,11 @@ Space chooses one, and Escape or Tab closes the list. Only one combo box is open
 at a time; opening another closes the first, and Tab returns focus to the header
 before continuing traversal.
 
+A `focus_group()` subtree is one Tab stop. Arrow keys move focus between its
+focusable members, Home and End jump to the first and last, and Tab re-enters at
+the member that was focused last. Text inputs, sliders, and combo boxes keep
+their own arrow-key handling and are not navigated by the group while focused.
+
 ## Pointer and disabled state
 
 The pointer behavior is symmetric: a mouse release activates an action only

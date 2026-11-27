@@ -19,6 +19,7 @@
 #include "sleet/error.hh"
 #include "sleet/math/edge_insets.hh"
 #include "sleet/math/vec2.hh"
+#include "sleet/shortcut.hh"
 #include "sleet/widget/animation.hh"
 #include "sleet/widget/control.hh"
 #include "sleet/widget/id.hh"
@@ -160,6 +161,10 @@ namespace sleet::widget
         /// Whether the widget participates in keyboard focus traversal.
         bool focusable = false;
 
+        /// Requests focus when nothing else is focused and when its modal
+        /// opens. A non-focusable node focuses its first focusable descendant.
+        bool autofocus = false;
+
         /// The initial state of an indicator widget.
         bool checked = false;
 
@@ -179,12 +184,25 @@ namespace sleet::widget
         /// Limits Tab traversal to this subtree while focus is inside it.
         bool focus_scope = false;
 
+        /// Treats this subtree as a single Tab stop. Arrow keys move focus
+        /// between its focusable descendants, and Tab remembers the last one.
+        bool focus_group = false;
+
         /// Marks this node as a modal surface. Focus moves into the topmost
         /// visible modal, and Escape dispatches \c cancel_action.
         bool modal = false;
 
         /// The action dispatched when Escape is pressed inside a modal.
         std::string cancel_action;
+
+        /// Keyboard shortcuts that are active while this subtree is visible.
+        /// The deepest matching binding wins over shallower and application
+        /// bindings.
+        std::vector<shortcut_binding> shortcuts;
+
+        /// Set when a text shortcut could not be parsed. Finalization rejects
+        /// the tree so the mistake is reported instead of silently ignored.
+        std::string shortcut_error;
 
         /// Resolves the fill color from the theme instead of an explicit
         /// color. \c tone::none leaves the background unset.

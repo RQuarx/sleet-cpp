@@ -95,7 +95,10 @@ box()[label("Hello")]
 | `background`, `foreground`, `border`, `border_width` | Visual styling |
 | `radius(px)` | Override the theme's corner radius |
 | `on_click("action")` | Attach an action name for event mapping |
+| `on_shortcut(chord, "action")` | Register a keyboard shortcut active while this subtree is visible |
 | `focusable()` | Include the widget in the Tab focus order |
+| `autofocus()` | Focus this widget or its first focusable descendant when nothing valid is focused |
+| `focus_group(bool)` | Treat the subtree as one Tab stop with arrow-key navigation |
 | `tone_of(tone)`, `variant(button_variant)` | Resolve semantic colors from the theme |
 | `background_of(tone)`, `border_of(tone)` | Fill or outline using a theme tone |
 | `control(kind)`, `checked(bool)`, `control_value(float)`, `placeholder(text)` | Control metadata; built-in widgets set these for you |
@@ -127,6 +130,34 @@ Nodes without an explicit id receive a generated id from their kind, name, call
 site, and per-parent occurrence. The call site is part of the key, so inserting
 an unrelated sibling does not renumber existing widgets. See [[Layout]] for
 overlay and scrolling rules.
+
+## Shortcuts and focus
+
+Application-wide shortcuts are registered on the application; widget-scoped
+shortcuts travel with the view:
+
+```cpp
+auto panel = column()[...] | on_shortcut("Ctrl+S", "save");
+app.on_shortcut("Ctrl+K", "command_palette");
+```
+
+`on_shortcut` accepts a text chord such as `"Ctrl+Shift+S"`, `"Cmd+Enter"`, or
+`"F5"`, a `key_chord`, or a key code plus modifier mask. Modifiers must match
+exactly, Caps Lock and Num Lock are ignored, and repeats are ignored unless the
+chord sets `repeat`. A match emits a `key_down` event whose `action` is the
+bound action.
+
+View-scoped bindings only fire while their subtree is visible, and the deepest
+matching binding wins over shallower and application bindings. Built-in
+editing and control keys take precedence, and while a text input is focused,
+shortcuts without Ctrl, Alt, or Super are skipped so typing is never stolen;
+function keys still work.
+
+`autofocus()` requests focus when no valid widget is focused, including when
+its modal opens. `focus_group()` collapses a subtree into one Tab stop: Left/Up
+and Right/Down move between members, Home and End jump to the ends, and Tab
+remembers the member that was active last. Text inputs, sliders, and combo
+boxes keep their own arrow-key behavior inside a group.
 
 ## Overlays
 

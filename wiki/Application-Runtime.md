@@ -76,6 +76,33 @@ inside it and the previously focused widget is restored when the modal closes.
 `focus_scope()` traps Tab without blocking outside clicks. The last visible
 modal in paint order wins.
 
+### Shortcuts
+
+`on_shortcut("Ctrl+S", "save")` registers an application-wide binding; the
+same overloads accept a `key_chord` or a key code and modifier mask. Chords
+match on the exact modifier set, ignoring Caps Lock and Num Lock; repeats are
+ignored unless `key_chord::repeat` is set. A match dispatches `key_down` with
+the bound action and no target node.
+
+A visible widget subtree can register its own bindings with `on_shortcut(...)`.
+The deepest matching binding wins over shallower and application-wide bindings,
+and bindings in hidden or disabled subtrees never fire. While a modal is open,
+the view-scoped search is limited to the modal subtree; application bindings
+remain active.
+
+Built-in editing and control handling runs before shortcuts, so Enter, Space,
+arrows, and text editing are never stolen. While a text input is focused,
+shortcuts without Ctrl, Alt, or Super are skipped, except function keys, so
+plain letters reach the field. Plain Tab remains focus traversal; bind a
+modified Tab such as Ctrl+Tab when a shortcut is needed.
+
+`autofocus()` focuses its node, or its first focusable descendant, when no
+valid widget is focused and when its modal opens. Existing valid focus is never
+stolen. `focus_group()` makes a subtree a single Tab stop: arrows move between
+members, Home and End jump to the ends, and Tab returns to the member focused
+last. Focus groups remember their member across view rebuilds; text inputs,
+sliders, and combo boxes keep their own arrow-key behavior.
+
 Wheel events scroll the nearest `scrollable()` ancestor by 48 logical pixels per
 step and are also dispatched as `scroll` events with logical coordinates and
 deltas. The runtime moves 40% of the step immediately and eases the remainder,

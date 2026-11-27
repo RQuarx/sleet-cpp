@@ -1,7 +1,9 @@
 #pragma once
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "sleet/widget/node.hh"
@@ -299,6 +301,68 @@ namespace sleet::widget
                                     { data.action = action; });
     }
 
+
+    /// Registers a keyboard shortcut that is active while this node's subtree
+    /// is visible. The deepest matching binding in the tree wins.
+    /// \param chord The key and exact modifier mask.
+    /// \param action The action reported by the resulting \c key_down event.
+    [[nodiscard]]
+    inline auto on_shortcut(key_chord chord, std::string action)
+    {
+        chord.modifiers = shortcut_modifiers(chord.modifiers);
+        return _impl::make_modifier(
+            [chord, action = std::move(action)](node_data &data)
+            {
+                if (chord.key == 0)
+                {
+                    data.shortcut_error = "a shortcut needs a key";
+                    return;
+                }
+
+                data.shortcuts.push_back({ chord, action });
+            });
+    }
+
+
+    /// Registers a keyboard shortcut from text such as \c "Ctrl+Shift+S" or
+    /// \c "F5". An invalid chord is reported when the widget tree is
+    /// finalized.
+    /// \param chord The shortcut text.
+    /// \param action The action reported by the resulting \c key_down event.
+    [[nodiscard]]
+    inline auto on_shortcut(std::string_view chord, std::string action)
+    {
+        return _impl::make_modifier(
+            [text = std::string { chord }, action = std::move(action)](node_data &data)
+            {
+                const auto parsed = parse_key_chord(text);
+                if (!parsed)
+                {
+                    data.shortcut_error = "invalid shortcut \"" + text + "\"";
+                    return;
+                }
+
+                auto value      = *parsed;
+                value.modifiers = shortcut_modifiers(value.modifiers);
+                data.shortcuts.push_back({ value, action });
+            });
+    }
+
+
+    /// Registers a keyboard shortcut from a key code and modifier mask.
+    /// \param key The SDL key code.
+    /// \param modifiers The SDL modifier mask.
+    /// \param action The action reported by the resulting \c key_down event.
+    /// \param repeat Whether the shortcut also fires while the key repeats.
+    [[nodiscard]]
+    inline auto on_shortcut(std::uint32_t key,
+                            std::uint16_t modifiers,
+                            std::string   action,
+                            bool          repeat = false)
+    {
+        return on_shortcut(key_chord { key, modifiers, repeat }, std::move(action));
+    }
+
     [[nodiscard]]
     inline auto visible(bool value = true)
     {
@@ -417,6 +481,15 @@ namespace sleet::widget
         return _impl::make_modifier([value](node_data &data) { data.focusable = value; });
     }
 
+
+    /// Requests focus when nothing else is focused and when this node's modal
+    /// opens. A non-focusable node focuses its first focusable descendant.
+    [[nodiscard]]
+    inline auto autofocus(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.autofocus = value; });
+    }
+
     [[nodiscard]]
     inline auto checked(bool value = true)
     {
@@ -463,6 +536,16 @@ namespace sleet::widget
     inline auto focus_scope(bool value = true)
     {
         return _impl::make_modifier([value](node_data &data) { data.focus_scope = value; });
+    }
+
+
+    /// Treats this subtree as one Tab stop. Arrow keys move focus between its
+    /// focusable descendants, Home and End jump to the first and last member,
+    /// and Tab returns to the member that was focused last.
+    [[nodiscard]]
+    inline auto focus_group(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.focus_group = value; });
     }
 
 

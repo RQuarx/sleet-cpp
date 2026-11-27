@@ -8,6 +8,7 @@ tests = {
   'color':         'color.cc',
   'control':       'control.cc',
   'nodes':         'nodes.cc',
+  'shortcut':      'shortcut.cc',
   'layout':        'layout.cc',
   'wrap':          'wrap.cc',
   'render':        'render.cc',

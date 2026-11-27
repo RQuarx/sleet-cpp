@@ -10,6 +10,7 @@
 #include "sleet/math/vec2.hh"
 #include "sleet/math/vec4.hh"
 #include "sleet/render_context.hh"
+#include "sleet/shortcut.hh"
 #include "sleet/text/grapheme.hh"
 #include "sleet/text/line_breaking.hh"
 #include "sleet/text/ustring.hh"

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <deque>
 #include <exception>
+#include <format>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -31,6 +32,7 @@
 
 #include "sleet/error.hh"
 #include "sleet/render_context.hh"
+#include "sleet/shortcut.hh"
 #include "sleet/traits.hh"
 #include "sleet/widget/control.hh"
 #include "sleet/widget/layout.hh"
@@ -595,6 +597,66 @@ namespace sleet
             return *this;
         }
 
+        /// Registers a keyboard shortcut that is active regardless of focus.
+        ///
+        /// A shortcut dispatches a \c key_down event with its action. Modifiers
+        /// must match exactly; Caps Lock and Num Lock are ignored. Key repeats
+        /// are ignored unless \c key_chord::repeat is set. While a text input is
+        /// focused, shortcuts without Ctrl, Alt, or Super are skipped so typing
+        /// is never stolen; function keys still work.
+        ///
+        /// Shortcuts declared on a visible widget subtree take precedence over
+        /// these application-wide bindings.
+        /// \param chord The key and exact modifier mask.
+        /// \param action The action reported by the resulting \c key_down event.
+        auto on_shortcut(key_chord chord, std::string action) -> application &
+        {
+            if (chord.key == 0)
+            {
+                if (m_shortcut_error.empty())
+                    m_shortcut_error = "sleet: a shortcut needs a key.";
+                return *this;
+            }
+
+            chord.modifiers = shortcut_modifiers(chord.modifiers);
+            m_shortcuts.push_back({ chord, std::move(action) });
+            return *this;
+        }
+
+        /// Registers a keyboard shortcut from a key code and modifier mask.
+        /// \param key The SDL key code.
+        /// \param modifiers The SDL modifier mask.
+        /// \param action The action reported by the resulting \c key_down event.
+        /// \param repeat Whether the shortcut also fires while the key repeats.
+        auto on_shortcut(std::uint32_t key,
+                         std::uint16_t modifiers,
+                         std::string   action,
+                         bool          repeat = false) -> application &
+        {
+            return on_shortcut(key_chord { key, modifiers, repeat }, std::move(action));
+        }
+
+        /// Registers a keyboard shortcut from text such as \c "Ctrl+Shift+S",
+        /// \c "Cmd+Enter", or \c "F5".
+        ///
+        /// An invalid shortcut is reported by \c run(), which returns a
+        /// non-zero exit code before starting the event loop.
+        /// \param chord The shortcut text.
+        /// \param action The action reported by the resulting \c key_down event.
+        auto on_shortcut(std::string_view chord, std::string action) -> application &
+        {
+            auto parsed = parse_key_chord(chord);
+            if (!parsed)
+            {
+                if (m_shortcut_error.empty())
+                    m_shortcut_error
+                        = std::format("sleet: invalid shortcut \"{}\".", chord);
+                return *this;
+            }
+
+            return on_shortcut(*parsed, std::move(action));
+        }
+
         /// Replaces the theme. Call from an update callback or the event-loop
         /// thread; the application is not thread-safe.
         void set_theme(widget::theme theme)
@@ -667,6 +729,12 @@ namespace sleet
 
         auto run() -> int
         {
+            if (!m_shortcut_error.empty())
+            {
+                std::println(stderr, "{}", m_shortcut_error);
+                return 1;
+            }
+
             if (!m_boot or !m_update or !m_view)
             {
                 std::println(stderr, "sleet: boot, update, and view callbacks are required.");
@@ -708,6 +776,13 @@ namespace sleet
 
         /// How long the pointer must rest before a tooltip appears.
         std::uint32_t m_tooltip_delay_ms = 550;
+
+        /// Application-wide keyboard shortcuts, checked after widget-scoped
+        /// bindings. The first matching binding wins.
+        std::vector<shortcut_binding> m_shortcuts;
+
+        /// The first invalid shortcut definition, reported by run().
+        std::string m_shortcut_error;
 
         /// Set by request_quit so callbacks can stop the loop.
         bool m_quit_requested = false;
@@ -769,6 +844,14 @@ namespace sleet
             std::optional<widget::widget_id>     focused;
             std::optional<widget::widget_id>     selecting;
             std::optional<widget::widget_id>     dragging;
+
+            /// The last focused member of each focus group, keyed by the group
+            /// node's id. Tab returns to that member when it re-enters.
+            std::unordered_map<widget::widget_id, widget::widget_id> focus_groups;
+
+            /// Whether any node in the current tree declares a shortcut. When
+            /// false, key handling skips the view-scoped search entirely.
+            bool has_view_shortcuts = false;
 
             /// The topmost modal for the current tree, if any. Events use this
             /// to trap focus and route Escape to the cancel action.
@@ -858,10 +941,11 @@ namespace sleet
         }
 
 
-        static void index_nodes(widget::node_data &node, node_index &out)
+        static void index_nodes(widget::node_data &node, node_index &out, bool &has_shortcuts)
         {
             out.emplace(node.id.view(), &node);
-            for (auto &child : node.children) index_nodes(child, out);
+            has_shortcuts = has_shortcuts or !node.shortcuts.empty();
+            for (auto &child : node.children) index_nodes(child, out, has_shortcuts);
         }
 
 
@@ -870,10 +954,11 @@ namespace sleet
         static void rebuild_node_index(session &current)
         {
             current.nodes.clear();
+            current.has_view_shortcuts = false;
             if (!current.tree) return;
 
             current.nodes.reserve(current.tree->children_amount() + 1);
-            index_nodes(*current.tree, current.nodes);
+            index_nodes(*current.tree, current.nodes, current.has_view_shortcuts);
         }
 
 
@@ -1255,12 +1340,134 @@ namespace sleet
         }
 
 
+        using focus_group_map
+            = std::unordered_map<widget::widget_id, widget::widget_id>;
+
+
+        /// Adds one representative for each nested focus group and every
+        /// ordinary focusable descendant.
+        static void gather_group_members(const widget::node_data          &node,
+                                         const focus_group_map            &groups,
+                                         std::vector<const widget::node_data *> &result)
+        {
+            for (const auto &child : node.children)
+            {
+                if (!child.visible or child.disabled) continue;
+
+                if (child.focus_group)
+                {
+                    if (const auto *member = group_representative(child, groups))
+                        result.push_back(member);
+                    continue;
+                }
+
+                if (child.focusable) result.push_back(&child);
+                gather_group_members(child, groups, result);
+            }
+        }
+
+
+        /// Returns the remembered member of \p group, or its first focusable
+        /// descendant when the remembered member is gone.
+        [[nodiscard]]
+        static auto group_representative(const widget::node_data &group,
+                                         const focus_group_map   &groups)
+            -> const widget::node_data *
+        {
+            auto members = std::vector<const widget::node_data *> {};
+            gather_group_members(group, groups, members);
+            if (members.empty())
+                return group.focusable ? &group : nullptr;
+
+            if (const auto it = groups.find(group.id); it != groups.end())
+                for (const auto *member : members)
+                    if (member->id == it->second) return member;
+
+            return members.front();
+        }
+
+
         static void collect_focusable(const widget::node_data                &node,
+                                      const focus_group_map                  &groups,
                                       std::vector<const widget::node_data *> &result)
         {
             if (!node.visible or node.disabled) return;
+
+            if (node.focus_group)
+            {
+                if (const auto *member = group_representative(node, groups))
+                    result.push_back(member);
+                return;
+            }
+
             if (node.focusable) result.push_back(&node);
-            for (const auto &child : node.children) collect_focusable(child, result);
+            for (const auto &child : node.children)
+                collect_focusable(child, groups, result);
+        }
+
+
+        /// Finds the widget an autofocus request should land on. A focusable
+        /// node focuses itself; a container focuses its first focusable
+        /// descendant or its focus group's remembered member.
+        [[nodiscard]]
+        static auto autofocus_target(const widget::node_data &node,
+                                     const focus_group_map   &groups)
+            -> const widget::node_data *
+        {
+            if (!node.visible or node.disabled) return nullptr;
+            if (node.focus_group)
+                if (const auto *member = group_representative(node, groups)) return member;
+            if (node.focusable) return &node;
+
+            for (const auto &child : node.children)
+                if (const auto *target = autofocus_target(child, groups))
+                    return target;
+
+            return nullptr;
+        }
+
+
+        static void find_autofocus(const widget::node_data          &node,
+                                   const focus_group_map            &groups,
+                                   const widget::node_data *&result)
+        {
+            if (result != nullptr or !node.visible or node.disabled) return;
+
+            if (node.autofocus)
+                if (const auto *target = autofocus_target(node, groups))
+                {
+                    result = target;
+                    return;
+                }
+
+            for (const auto &child : node.children)
+                find_autofocus(child, groups, result);
+        }
+
+
+        /// Moves focus to the first autofocus request in the active scope when
+        /// no valid widget currently owns it. A widget that is already focused
+        /// is never replaced, so autofocus does not steal focus while a user
+        /// types or navigates.
+        void apply_autofocus(session &current, widget::node_data &root)
+        {
+            if (current.focused)
+                if (const auto *focused = find_node(current, *current.focused);
+                    focused != nullptr and focused->focusable
+                    and _impl::effectively_visible(*focused))
+                    return;
+
+            const widget::node_data *scope = &root;
+            if (current.active_modal)
+            {
+                const auto *modal = find_node(current, *current.active_modal);
+                if (modal == nullptr) return;
+                scope = modal;
+            }
+
+            const widget::node_data *target = nullptr;
+            find_autofocus(*scope, current.focus_groups, target);
+            if (target != nullptr) focus_node(current, *target);
         }
 
 
@@ -1279,6 +1486,12 @@ namespace sleet
                 current.preedit_caret = 0;
                 mark_layout_dirty(current);
             }
+
+            // Remember the active member of every enclosing focus group so Tab
+            // returns to it after focus leaves the group.
+            for (auto *ancestor = node.parent; ancestor != nullptr; ancestor = ancestor->parent)
+                if (ancestor->focus_group)
+                    current.focus_groups[ancestor->id] = node.id;
 
             current.focus_visible = keyboard;
             current.reveal_focus  = true;
@@ -1309,7 +1522,7 @@ namespace sleet
             }
 
             std::vector<const widget::node_data *> nodes;
-            collect_focusable(*scope, nodes);
+            collect_focusable(*scope, current.focus_groups, nodes);
 
             if (nodes.empty())
             {
@@ -1383,15 +1596,19 @@ namespace sleet
                     return;
 
             std::vector<const widget::node_data *> nodes;
-            collect_focusable(*modal, nodes);
+            collect_focusable(*modal, current.focus_groups, nodes);
 
-            if (nodes.empty())
+            const widget::node_data *target = nullptr;
+            find_autofocus(*modal, current.focus_groups, target);
+            if (target == nullptr and !nodes.empty()) target = nodes.front();
+
+            if (target == nullptr)
             {
                 current.focused.reset();
                 current.selecting.reset();
             }
             else
-                focus_node(current, *nodes.front());
+                focus_node(current, *target);
 
             current.dirty = true;
         }
@@ -1490,6 +1707,19 @@ namespace sleet
                 else if (node->control == widget::control_kind::text_input
                          and !current.edits.contains(node->id))
                     current.edits[node->id].collapse(node->text.size());
+            }
+
+            for (auto it = current.focus_groups.begin(); it != current.focus_groups.end();)
+            {
+                const auto *group  = find_node(current, it->first);
+                const auto *member = find_node(current, it->second);
+
+                if (group == nullptr or !group->focus_group or member == nullptr
+                    or !member->focusable or !_impl::effectively_visible(*member)
+                    or !_impl::inside_subtree(*member, *group))
+                    it = current.focus_groups.erase(it);
+                else
+                    ++it;
             }
 
             if (current.selecting)
@@ -2100,6 +2330,9 @@ namespace sleet
                     return true;
                 }
 
+                // A single-line field leaves modified Enter to shortcuts.
+                if (!node.multiline and (ctrl or alt or gui)) return false;
+
                 emit_control(current, event::kind::submit, node, node.text);
                 return true;
 
@@ -2128,6 +2361,9 @@ namespace sleet
         auto handle_slider_key(session &current, widget::node_data &node, const SDL_Event &native)
             -> bool
         {
+            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
+                return false;
+
             constexpr auto step  = 0.05F;
             auto           value = node.control_value;
 
@@ -2220,6 +2456,9 @@ namespace sleet
         auto handle_combo_key(session &current, widget::node_data &node, const SDL_Event &native)
             -> bool
         {
+            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
+                return false;
+
             const bool is_open = current.open_combos.contains(node.id);
 
             switch (native.key.key)
@@ -2275,6 +2514,9 @@ namespace sleet
                                      widget::node_data &node,
                                      const SDL_Event   &native) -> bool
         {
+            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
+                return false;
+
             switch (native.key.key)
             {
             case SDLK_RETURN:
@@ -2325,6 +2567,11 @@ namespace sleet
 
             if (node->action.empty()) return false;
 
+            // Modified Enter and Space are left to shortcuts; keyboard
+            // activation uses the unmodified keys.
+            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
+                return false;
+
             switch (native.key.key)
             {
             case SDLK_RETURN:
@@ -2341,6 +2588,8 @@ namespace sleet
         auto handle_focus_key(session &current, const SDL_Event &native) -> bool
         {
             if (native.key.key != SDLK_TAB) return false;
+            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
+                return false;
             if (native.key.repeat) return true;
 
             // Tab dismisses an open popup. Focus returns to its header before
@@ -2798,6 +3047,200 @@ namespace sleet
         }
 
 
+        [[nodiscard]]
+        static auto containing_focus_group(const widget::node_data &node) noexcept
+            -> const widget::node_data *
+        {
+            for (const auto *ancestor = node.parent; ancestor != nullptr;
+                 ancestor             = ancestor->parent)
+                if (ancestor->focus_group) return ancestor;
+
+            return nullptr;
+        }
+
+
+        /// Moves focus between members of the nearest enclosing focus group.
+        /// Controls that use arrow keys themselves are excluded, and modified
+        /// arrows are left to shortcuts.
+        auto handle_focus_group_key(session &current, const SDL_Event &native) -> bool
+        {
+            if (native.type != SDL_EVENT_KEY_DOWN) return false;
+            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
+                return false;
+
+            auto *node = focused_node(current);
+            if (node == nullptr or !_impl::effectively_visible(*node)) return false;
+
+            switch (node->control)
+            {
+            case widget::control_kind::text_input:
+            case widget::control_kind::slider:
+            case widget::control_kind::combo_box:
+            case widget::control_kind::combo_option: return false;
+            case widget::control_kind::combo_popup:
+            case widget::control_kind::checkbox_indicator:
+            case widget::control_kind::radio_indicator:
+            case widget::control_kind::none: break;
+            }
+
+            const auto *group = containing_focus_group(*node);
+            if (group == nullptr) return false;
+
+            auto delta = 0;
+            auto edge  = false;
+            auto last  = false;
+
+            switch (native.key.key)
+            {
+            case SDLK_LEFT:
+            case SDLK_UP:    delta = -1; break;
+            case SDLK_RIGHT:
+            case SDLK_DOWN:  delta = 1; break;
+            case SDLK_HOME:  edge = true; break;
+            case SDLK_END:   edge = true; last = true; break;
+            default:         return false;
+            }
+
+            if (native.key.repeat and edge) return true;
+
+            auto members = std::vector<const widget::node_data *> {};
+            gather_group_members(*group, current.focus_groups, members);
+            if (members.empty()) return false;
+
+            auto index = std::size_t { 0 };
+            const auto found
+                = std::find_if(members.begin(), members.end(), [&current](const auto *member)
+                               { return current.focused and member->id == *current.focused; });
+            if (found != members.end())
+                index = static_cast<std::size_t>(found - members.begin());
+
+            if (edge)
+                index = last ? members.size() - 1 : 0;
+            else
+            {
+                const auto count = static_cast<std::ptrdiff_t>(members.size());
+                const auto next
+                    = (static_cast<std::ptrdiff_t>(index) + delta + count) % count;
+                index = static_cast<std::size_t>(next);
+            }
+
+            if (current.focused and members[index]->id == *current.focused) return true;
+            focus_node(current, *members[index], true);
+            return true;
+        }
+
+
+        struct view_shortcut_match
+        {
+            const widget::node_data *node    = nullptr;
+            const shortcut_binding  *binding = nullptr;
+            std::size_t              depth   = 0;
+        };
+
+
+        /// Finds the deepest matching shortcut in a visible subtree. Ties keep
+        /// the first binding in document order.
+        static void find_view_shortcut(const widget::node_data &node,
+                                       std::uint32_t            key,
+                                       std::uint16_t            modifiers,
+                                       bool                     repeat,
+                                       std::size_t              depth,
+                                       bool                     hidden,
+                                       view_shortcut_match     &best)
+        {
+            if (!node.visible) hidden = true;
+
+            if (!hidden and !node.disabled)
+                for (const auto &binding : node.shortcuts)
+                {
+                    if (binding.chord.key != key) continue;
+                    if (shortcut_modifiers(binding.chord.modifiers) != modifiers) continue;
+                    if (repeat and !binding.chord.repeat) continue;
+
+                    if (best.node == nullptr or depth > best.depth)
+                        best = { &node, &binding, depth };
+                    break;
+                }
+
+            const auto children_hidden = hidden or !node.visible or node.disabled;
+            for (const auto &child : node.children)
+                find_view_shortcut(child, key, modifiers, repeat, depth + 1,
+                                   children_hidden, best);
+        }
+
+
+        /// While a text field has focus, plain keys must reach the field instead
+        /// of a shortcut. Function keys never insert text and still work.
+        [[nodiscard]]
+        auto shortcut_key_allowed(session &current,
+                                  std::uint32_t key,
+                                  std::uint16_t modifiers) const -> bool
+        {
+            const auto *focused = focused_node(current);
+            if (focused == nullptr or focused->control != widget::control_kind::text_input
+                or !_impl::effectively_visible(*focused))
+                return true;
+
+            if ((modifiers & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
+                return true;
+
+            return (key >= SDLK_F1 and key <= SDLK_F12)
+                or (key >= SDLK_F13 and key <= SDLK_F24);
+        }
+
+
+        /// Dispatches a view-scoped shortcut when one matches, then falls back
+        /// to application-wide bindings.
+        auto handle_shortcut_key(session &current, const SDL_Event &native) -> bool
+        {
+            if (native.type != SDL_EVENT_KEY_DOWN) return false;
+            if (m_shortcuts.empty() and !current.has_view_shortcuts) return false;
+
+            const auto modifiers = shortcut_modifiers(native.key.mod);
+            if (!shortcut_key_allowed(current, native.key.key, modifiers)) return false;
+
+            auto best = view_shortcut_match {};
+            if (current.has_view_shortcuts and current.tree)
+            {
+                const widget::node_data *scope = &*current.tree;
+                if (current.active_modal)
+                    scope = find_node(current, *current.active_modal);
+
+                if (scope != nullptr)
+                    find_view_shortcut(*scope, native.key.key, modifiers,
+                                       native.key.repeat, 0, false, best);
+            }
+
+            if (best.binding != nullptr)
+            {
+                auto value      = make_event(event::kind::key_down, best.node);
+                value.key       = native.key.key;
+                value.modifiers = modifiers;
+                value.repeat    = native.key.repeat;
+                value.action    = best.binding->action;
+                dispatch(value, current);
+                return true;
+            }
+
+            for (const auto &binding : m_shortcuts)
+            {
+                if (binding.chord.key != native.key.key) continue;
+                if (shortcut_modifiers(binding.chord.modifiers) != modifiers) continue;
+                if (native.key.repeat and !binding.chord.repeat) continue;
+
+                auto value      = make_event(event::kind::key_down, nullptr);
+                value.key       = native.key.key;
+                value.modifiers = modifiers;
+                value.repeat    = native.key.repeat;
+                value.action    = binding.action;
+                dispatch(value, current);
+                return true;
+            }
+
+            return false;
+        }
+
+
         void handle_key(session &current, render_context &context, const SDL_Event &native)
         {
             if (native.type == SDL_EVENT_KEY_DOWN)
@@ -2826,6 +3269,8 @@ namespace sleet
                 }
 
                 if (handle_control_key(current, context, native)) return;
+                if (handle_shortcut_key(current, native)) return;
+                if (handle_focus_group_key(current, native)) return;
             }
 
             auto value      = make_event(native.type == SDL_EVENT_KEY_DOWN ? event::kind::key_down
@@ -3196,6 +3641,7 @@ namespace sleet
 
             sync_controls(current, *current.tree);
             enforce_modal_focus(current, *current.tree);
+            apply_autofocus(current, *current.tree);
 
             auto next_layout
                 = calculate_layout(*current.tree, measure,

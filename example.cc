@@ -60,6 +60,7 @@ namespace
             dialog_open,
             dialog_cancel,
             dialog_save,
+            shortcut_demo,
             toast,
         };
 
@@ -158,14 +159,15 @@ namespace
                                          | text_role(font_role::heading) | text_color(0xF3F5F8_rgb),
                                      muted("Every built-in widget in one interactive window.")]
                                 | gap(2.F),
-                            spacer(), badge("v1.5.0")]
+                            spacer(), badge("v1.6.0")]
                     | gap(12.F) | width(sizing::fill()) | valign(align::center);
 
 
         auto input_card
             = card(column()[section_title("Text input"),
-                            text_input(current.name, "name", "Type your name..."),
-                            muted("Enter submits. Arrows, Home/End, Ctrl+A and Ctrl+C/X/V work.")]
+                            text_input(current.name, "name", "Type your name...") | autofocus(),
+                            muted("Autofocused on launch. Enter submits. Ctrl+K works even "
+                                  "while typing.")]
                    | gap(8.F));
 
 
@@ -183,7 +185,8 @@ namespace
                                         "density_comfortable"),
                            radio_button("Spacious", current.density == "Spacious",
                                         "density_spacious")]
-                         | gap(10.F)]
+                         | gap(10.F) | focus_group(),
+                     muted("The radio row is one Tab stop; arrow keys move inside it.")]
             | gap(8.F));
 
 
@@ -282,7 +285,8 @@ namespace
 
         auto overlay_card = card(
             column()[section_title("Tooltips, menus, and dialogs"),
-                     muted("Hover for a tooltip. Menus and dialogs trap focus; Escape cancels."),
+                     muted("Hover for a tooltip. Ctrl+Enter saves the dialog. Menus and dialogs "
+                           "trap focus; Escape cancels."),
                      row()[std::move(menu_holder),
                            button("Edit profile", "dialog_open", button_variant::primary)
                                | id("dialog-trigger"),
@@ -302,8 +306,8 @@ namespace
                    | width(sizing::grow()) | flex(1.F) | gap(14.F);
 
 
-        auto footer = row()[muted("Tab moves focus. Click a combo header to open it. "
-                                  "Clicking outside closes it."),
+        auto footer = row()[muted("Tab moves focus. Arrow keys move within a focus group. "
+                                  "Ctrl+K fires a global shortcut."),
                             spacer(), badge("interactive")]
                     | gap(12.F) | width(sizing::fill()) | valign(align::center);
 
@@ -326,7 +330,8 @@ namespace
                                          button("Save", "dialog_save", button_variant::primary)]
                                        | gap(8.F) | width(sizing::fill())]
                         | gap(12.F) | padding(18.F) | width(380.F) | background_of(tone::field)
-                        | border_of(tone::border) | align_self(align::center) | id("dialog-panel");
+                        | border_of(tone::border) | align_self(align::center) | id("dialog-panel")
+                        | on_shortcut(SDLK_RETURN, SDL_KMOD_CTRL, "dialog_save");
 
             auto overlay = floating_box(anchor_point::center, 400) | id("dialog-overlay")
                          | backdrop() | modal("dialog_cancel");
@@ -346,6 +351,7 @@ auto main() -> int
         auto instance = app { "Sleet widget gallery", 1040, 1000 };
 
         instance
+            .on_shortcut("Ctrl+K", "shortcut_demo")
             .on_boot([]() -> kei::result<std::pair<state, message>>
                      { return std::pair { state {}, message {} }; })
             .on_update(
@@ -392,6 +398,9 @@ auto main() -> int
                         current.dialog_open = false;
                         instance.notify("Profile saved", 2.5F);
                         break;
+                    case message::kind::shortcut_demo:
+                        instance.notify("Global shortcut Ctrl+K fired", 2.5F);
+                        break;
                     case message::kind::toast:
                         instance.notify("This is a toast notification", 3.F);
                         break;
@@ -414,8 +423,12 @@ auto main() -> int
                     case event::kind::key_down:
                         if (input.action == "dialog_cancel")
                             return message { message::kind::dialog_cancel };
+                        if (input.action == "dialog_save")
+                            return message { message::kind::dialog_save };
                         if (input.action == "menu_close")
                             return message { message::kind::menu_close };
+                        if (input.action == "shortcut_demo")
+                            return message { message::kind::shortcut_demo };
                         return std::nullopt;
 
                     case event::kind::text_edit:

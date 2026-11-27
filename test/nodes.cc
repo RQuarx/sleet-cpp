@@ -1,9 +1,11 @@
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include <SDL3/SDL_keycode.h>
 #include <boost/ut.hpp>
 
 #include "sleet/widget/modifier.hh"
@@ -21,7 +23,8 @@ const boost::ut::suite node_tests = []
     {
         auto original = box()[column()[label("hello") | margin(2.F)] | gap(3.F)] | gap(7.F)
                       | padding(5.F) | margin(1.F) | flex(2.F) | text_wrap(text_wrap_mode::no_wrap)
-                      | text_align(text_alignment::right);
+                      | text_align(text_alignment::right) | autofocus() | focus_group()
+                      | on_shortcut(SDLK_S, SDL_KMOD_CTRL, "save");
 
         const auto data = std::move(original).release();
         expect(eq(data.gap, 7.F));
@@ -30,6 +33,16 @@ const boost::ut::suite node_tests = []
         expect(eq(data.flex, 2.F));
         expect(data.wrap == text_wrap_mode::no_wrap);
         expect(data.text_align == text_alignment::right);
+        expect(data.autofocus);
+        expect(data.focus_group);
+        expect(eq(data.shortcuts.size(), std::size_t { 1 }));
+        if (!data.shortcuts.empty())
+        {
+            expect(eq(data.shortcuts[0].chord.key, static_cast<std::uint32_t>(SDLK_S)));
+            expect(eq(data.shortcuts[0].chord.modifiers,
+                      static_cast<std::uint16_t>(SDL_KMOD_CTRL)));
+            expect(eq(data.shortcuts[0].action, "save"s));
+        }
 
         auto copy = data;
         expect(eq(copy.gap, 7.F));
@@ -38,12 +51,20 @@ const boost::ut::suite node_tests = []
         expect(eq(copy.children[0].gap, 3.F));
         expect(copy.wrap == text_wrap_mode::no_wrap);
         expect(copy.text_align == text_alignment::right);
+        expect(copy.autofocus);
+        expect(copy.focus_group);
+        expect(eq(copy.shortcuts.size(), std::size_t { 1 }));
 
         auto moved = std::move(copy);
         expect(eq(moved.gap, 7.F));
         expect(moved.children[0].parent == &moved);
         expect(moved.wrap == text_wrap_mode::no_wrap);
         expect(moved.text_align == text_alignment::right);
+        expect(moved.autofocus);
+        expect(moved.focus_group);
+        expect(eq(moved.shortcuts.size(), std::size_t { 1 }));
+        if (!moved.shortcuts.empty())
+            expect(eq(moved.shortcuts[0].action, "save"s));
     };
 
     "deep copies keep every parent pointer inside the copy"_test = []
@@ -135,6 +156,24 @@ const boost::ut::suite node_tests = []
         const auto result = tree.finalize();
         expect(!result);
         expect(std::string { result.error().what() }.find("Duplicate") != std::string::npos);
+    };
+
+    "invalid text shortcuts are rejected at finalization"_test = []
+    {
+        auto invalid = to_data(box() | on_shortcut("Ctrl+Nope", "x"));
+        expect(!invalid.shortcut_error.empty());
+
+        auto copy = invalid;
+        expect(!copy.shortcut_error.empty());
+
+        const auto result = copy.finalize();
+        expect(!result);
+        expect(std::string { result.error().what() }.find("invalid shortcut")
+               != std::string::npos);
+
+        auto valid = to_data(box() | on_shortcut("Ctrl+S", "save"));
+        expect(static_cast<bool>(valid.finalize()));
+        expect(eq(valid.shortcuts.size(), std::size_t { 1 }));
     };
 
     "parent pointers survive copies and moves"_test = []

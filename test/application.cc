@@ -40,12 +40,13 @@ namespace
     }
 
 
-    auto push_key(SDL_Keycode key, SDL_Keymod mod = SDL_KMOD_NONE) -> void
+    auto push_key(SDL_Keycode key, SDL_Keymod mod = SDL_KMOD_NONE, bool repeat = false) -> void
     {
         SDL_Event native {};
-        native.type    = SDL_EVENT_KEY_DOWN;
-        native.key.key = key;
-        native.key.mod = mod;
+        native.type       = SDL_EVENT_KEY_DOWN;
+        native.key.key    = key;
+        native.key.mod    = mod;
+        native.key.repeat = repeat;
         SDL_PushEvent(&native);
     }
 
@@ -1341,6 +1342,668 @@ const boost::ut::suite overlay_tests = []
         expect(eq(observed.twos, 1));
         expect(eq(observed.cancels, 2));
         expect(!observed.open);
+    };
+
+    "global shortcuts pass through text input and respect exact modifiers"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+            std::string text;
+            int         saves            = 0;
+            int         plains           = 0;
+            int         tabbed           = 0;
+            int         submit_shortcuts = 0;
+            int         function_keys    = 0;
+            int         submits          = 0;
+        };
+
+        struct message
+        {
+            std::string action;
+            std::string text;
+        };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto result
+            = app { "sleet-global-shortcut-test", 320, 240, std::move(theme) }
+                  .on_shortcut("Ctrl+S", "save")
+                  .on_shortcut("x", "plain")
+                  .on_shortcut("Ctrl+Tab", "tabbed")
+                  .on_shortcut("Ctrl+Enter", "submit_shortcut")
+                  .on_shortcut("F5", "function_key")
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message {} }; })
+                  .on_update(
+                      [](state &current, const message &value) -> kei::result<>
+                      {
+                          if (value.action == "text")
+                              current.text = value.text;
+                          else if (value.action == "save")
+                              current.saves++;
+                          else if (value.action == "plain")
+                              current.plains++;
+                          else if (value.action == "tabbed")
+                              current.tabbed++;
+                          else if (value.action == "submit_shortcut")
+                              current.submit_shortcuts++;
+                          else if (value.action == "function_key")
+                              current.function_keys++;
+                          else if (value.action == "submit")
+                              current.submits++;
+                          return {};
+                      })
+                  .on_view(
+                      [&observed](const state &current)
+                      {
+                          observed = current;
+                          return column()[text_input(current.text, "name")];
+                      })
+                  .on_event(
+                      [](const sleet::event &input) -> std::optional<message>
+                      {
+                          if (input.type == sleet::event::kind::text_edit
+                              and input.action == "name")
+                              return message { "text", input.text };
+
+                          if (input.type == sleet::event::kind::submit
+                              and input.action == "name")
+                              return message { "submit", {} };
+
+                          if (input.type == sleet::event::kind::key_down
+                              and !input.action.empty())
+                              return message { input.action, {} };
+
+                          return std::nullopt;
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1:  push_key(SDLK_TAB); break;
+                          case 2:  push_text("ab"); break;
+                          case 3:  push_key(SDLK_S, SDL_KMOD_CTRL); break;
+                          case 4:  push_key(SDLK_S, SDL_KMOD_CTRL | SDL_KMOD_SHIFT); break;
+                          case 5:  push_key(SDLK_RETURN, SDL_KMOD_CTRL); break;
+                          case 6:  push_key(SDLK_X); break;
+                          case 7:  push_text("c"); break;
+                          case 8:  push_key(SDLK_TAB, SDL_KMOD_CTRL); break;
+                          case 9:  push_key(SDLK_F5); break;
+                          case 10: push_key(SDLK_ESCAPE); break;
+                          case 11: push_key(SDLK_X); break;
+                          case 12: push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.text, std::string { "abc" }));
+        expect(eq(observed.saves, 1));
+        expect(eq(observed.plains, 1));
+        expect(eq(observed.tabbed, 1));
+        expect(eq(observed.submit_shortcuts, 1));
+        expect(eq(observed.function_keys, 1));
+        expect(eq(observed.submits, 0));
+    };
+
+    "view shortcuts follow visibility and override global bindings"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+            bool visible = true;
+            int  local   = 0;
+            int  global  = 0;
+        };
+
+        struct message
+        { std::string action; };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto result
+            = app { "sleet-view-shortcut-test", 320, 240, std::move(theme) }
+                  .on_shortcut("F2", "global")
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message {} }; })
+                  .on_update(
+                      [](state &current, const message &value) -> kei::result<>
+                      {
+                          if (value.action == "hide")
+                              current.visible = false;
+                          else if (value.action == "local")
+                              current.local++;
+                          else if (value.action == "global")
+                              current.global++;
+                          return {};
+                      })
+                  .on_view(
+                      [&observed](const state &current)
+                      {
+                          observed = current;
+                          return column()[box()[label("panel")] | visible(current.visible)
+                                          | on_shortcut(SDLK_F2, SDL_KMOD_NONE, "local")];
+                      })
+                  .on_event(
+                      [](const sleet::event &input) -> std::optional<message>
+                      {
+                          if (input.type == sleet::event::kind::key_down
+                              and !input.action.empty())
+                              return message { input.action };
+                          return std::nullopt;
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1:  push_key(SDLK_F2); break;
+                          case 2:  return message { "hide" };
+                          case 3:  push_key(SDLK_F2); break;
+                          case 4:  push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.local, 1));
+        expect(eq(observed.global, 1));
+    };
+
+    "autofocus focuses the first visible candidate without Tab"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+            std::string first;
+            std::string second;
+        };
+
+        struct message
+        {
+            std::string action;
+            std::string text;
+        };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto result
+            = app { "sleet-autofocus-test", 320, 240, std::move(theme) }
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message {} }; })
+                  .on_update(
+                      [](state &current, const message &value) -> kei::result<>
+                      {
+                          if (value.action == "first")
+                              current.first = value.text;
+                          else if (value.action == "second")
+                              current.second = value.text;
+                          return {};
+                      })
+                  .on_view(
+                      [&observed](const state &current)
+                      {
+                          observed = current;
+                          return column()[text_input(current.first, "first") | autofocus()
+                                              | visible(false),
+                                          text_input(current.second, "second") | autofocus()];
+                      })
+                  .on_event(
+                      [](const sleet::event &input) -> std::optional<message>
+                      {
+                          if (input.type == sleet::event::kind::text_edit)
+                              return message { input.action, input.text };
+                          return std::nullopt;
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1:  push_text("x"); break;
+                          case 2:  push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(observed.first.empty());
+        expect(eq(observed.second, std::string { "x" }));
+    };
+
+    "a modal autofocus target beats the first focusable widget"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+            bool        open = true;
+            std::string background;
+            std::string modal;
+        };
+
+        struct message
+        {
+            std::string action;
+            std::string text;
+        };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto result
+            = app { "sleet-modal-autofocus-test", 320, 240, std::move(theme) }
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message {} }; })
+                  .on_update(
+                      [](state &current, const message &value) -> kei::result<>
+                      {
+                          if (value.action == "background")
+                              current.background = value.text;
+                          else if (value.action == "modal")
+                              current.modal = value.text;
+                          else if (value.action == "cancel")
+                              current.open = false;
+                          return {};
+                      })
+                  .on_view(
+                      [&observed](const state &current)
+                      {
+                          observed = current;
+
+                          auto view = column()[text_input(current.background, "background")];
+                          if (current.open)
+                          {
+                              auto dialog
+                                  = column()[button("Cancel", "cancel"),
+                                             text_input(current.modal, "modal") | autofocus()]
+                                  | modal("cancel") | width(220.F);
+
+                              view = view[std::move(dialog)];
+                          }
+
+                          return view;
+                      })
+                  .on_event(
+                      [](const sleet::event &input) -> std::optional<message>
+                      {
+                          if (input.type == sleet::event::kind::text_edit)
+                              return message { input.action, input.text };
+
+                          if (input.type == sleet::event::kind::key_down
+                              and input.action == "cancel")
+                              return message { "cancel", {} };
+
+                          return std::nullopt;
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1:  push_text("m"); break;
+                          case 2:  push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(observed.background.empty());
+        expect(eq(observed.modal, std::string { "m" }));
+    };
+
+    "focus groups are one Tab stop and remember their last member"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+            int a       = 0;
+            int b       = 0;
+            int c       = 0;
+            int outside = 0;
+        };
+
+        struct message
+        { std::string action; };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto result
+            = app { "sleet-focus-group-test", 320, 240, std::move(theme) }
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message {} }; })
+                  .on_update(
+                      [](state &current, const message &value) -> kei::result<>
+                      {
+                          if (value.action == "a")
+                              current.a++;
+                          else if (value.action == "b")
+                              current.b++;
+                          else if (value.action == "c")
+                              current.c++;
+                          else if (value.action == "outside")
+                              current.outside++;
+                          return {};
+                      })
+                  .on_view(
+                      [&observed](const state &current)
+                      {
+                          observed = current;
+                          return column()[row()[button("A", "a"), button("B", "b"),
+                                                 button("C", "c")]
+                                              | focus_group(),
+                                          button("Outside", "outside")];
+                      })
+                  .on_event(
+                      [](const sleet::event &input) -> std::optional<message>
+                      {
+                          if (input.type == sleet::event::kind::activate)
+                              return message { input.action };
+                          return std::nullopt;
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1:  push_key(SDLK_TAB); break;
+                          case 2:  push_key(SDLK_RIGHT); break;
+                          case 3:  push_key(SDLK_RIGHT); break;
+                          case 4:  push_key(SDLK_RETURN); break;
+                          case 5:  push_key(SDLK_TAB); break;
+                          case 6:  push_key(SDLK_RETURN); break;
+                          case 7:  push_key(SDLK_TAB, SDL_KMOD_SHIFT); break;
+                          case 8:  push_key(SDLK_RETURN); break;
+                          case 9:  push_key(SDLK_LEFT); break;
+                          case 10: push_key(SDLK_RETURN); break;
+                          case 11: push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.a, 0));
+        expect(eq(observed.b, 1));
+        expect(eq(observed.c, 2));
+        expect(eq(observed.outside, 1));
+    };
+
+    "modified activation keys fall through to shortcuts"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+            int activations = 0;
+            int shortcuts   = 0;
+        };
+
+        struct message
+        { std::string action; };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto result
+            = app { "sleet-modified-activation-test", 320, 240, std::move(theme) }
+                  .on_shortcut("Ctrl+Enter", "modified")
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message {} }; })
+                  .on_update(
+                      [](state &current, const message &value) -> kei::result<>
+                      {
+                          if (value.action == "activate")
+                              current.activations++;
+                          else if (value.action == "modified")
+                              current.shortcuts++;
+                          return {};
+                      })
+                  .on_view(
+                      [&observed](const state &current)
+                      {
+                          observed = current;
+                          return column()[button("Go", "go")];
+                      })
+                  .on_event(
+                      [](const sleet::event &input) -> std::optional<message>
+                      {
+                          if (input.type == sleet::event::kind::activate)
+                              return message { "activate" };
+                          if (input.type == sleet::event::kind::key_down
+                              and !input.action.empty())
+                              return message { input.action };
+                          return std::nullopt;
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1:  push_key(SDLK_TAB); break;
+                          case 2:  push_key(SDLK_RETURN, SDL_KMOD_CTRL); break;
+                          case 3:  push_key(SDLK_RETURN); break;
+                          case 4:  push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.shortcuts, 1));
+        expect(eq(observed.activations, 1));
+    };
+
+    "modal shortcuts are scoped while global shortcuts stay active"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+            bool open       = true;
+            int  background = 0;
+            int  inside     = 0;
+            int  global     = 0;
+        };
+
+        struct message
+        { std::string action; };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto result
+            = app { "sleet-modal-shortcut-test", 320, 240, std::move(theme) }
+                  .on_shortcut("F4", "global")
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message {} }; })
+                  .on_update(
+                      [](state &current, const message &value) -> kei::result<>
+                      {
+                          if (value.action == "background")
+                              current.background++;
+                          else if (value.action == "inside")
+                              current.inside++;
+                          else if (value.action == "global")
+                              current.global++;
+                          else if (value.action == "cancel")
+                              current.open = false;
+                          return {};
+                      })
+                  .on_view(
+                      [&observed](const state &current)
+                      {
+                          observed = current;
+
+                          auto view = column()[box()[label("background")]
+                                               | on_shortcut("F2", "background")];
+                          if (current.open)
+                              view = view[column()[label("dialog")] | modal("cancel")
+                                          | on_shortcut("F3", "inside")];
+                          return view;
+                      })
+                  .on_event(
+                      [](const sleet::event &input) -> std::optional<message>
+                      {
+                          if (input.type == sleet::event::kind::key_down
+                              and !input.action.empty())
+                              return message { input.action };
+                          return std::nullopt;
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1:  push_key(SDLK_F3); break;
+                          case 2:  push_key(SDLK_F2); break;
+                          case 3:  push_key(SDLK_F4); break;
+                          case 4:  push_key(SDLK_ESCAPE); break;
+                          case 5:  push_key(SDLK_F2); break;
+                          case 6:  push_key(SDLK_F4); break;
+                          case 7:  push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.inside, 1));
+        expect(eq(observed.background, 1));
+        expect(eq(observed.global, 2));
+    };
+
+    "shortcut repeat is opt-in"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+            int once      = 0;
+            int repeating = 0;
+        };
+
+        struct message
+        { std::string action; };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto result
+            = app { "sleet-shortcut-repeat-test", 320, 240, std::move(theme) }
+                  .on_shortcut(SDLK_F5, SDL_KMOD_NONE, "once")
+                  .on_shortcut(SDLK_F6, SDL_KMOD_NONE, "repeating", true)
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message {} }; })
+                  .on_update(
+                      [](state &current, const message &value) -> kei::result<>
+                      {
+                          if (value.action == "once")
+                              current.once++;
+                          else if (value.action == "repeating")
+                              current.repeating++;
+                          return {};
+                      })
+                  .on_view([&observed](const state &current)
+                           {
+                               observed = current;
+                               return column()[label("shortcuts")];
+                           })
+                  .on_event(
+                      [](const sleet::event &input) -> std::optional<message>
+                      {
+                          if (input.type == sleet::event::kind::key_down
+                              and !input.action.empty())
+                              return message { input.action };
+                          return std::nullopt;
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1:  push_key(SDLK_F5, SDL_KMOD_NONE, true); break;
+                          case 2:  push_key(SDLK_F5); break;
+                          case 3:  push_key(SDLK_F6, SDL_KMOD_NONE, true); break;
+                          case 4:  push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.once, 1));
+        expect(eq(observed.repeating, 1));
     };
 };
 
