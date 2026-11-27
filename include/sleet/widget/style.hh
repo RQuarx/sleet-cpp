@@ -94,6 +94,26 @@ namespace sleet::widget
     };
 
 
+    /// How a text node breaks lines when its width is constrained.
+    enum class text_wrap_mode : std::uint8_t
+    {
+        no_wrap,      ///< Keep every paragraph on one line; overflow is clipped.
+        wrap,         ///< Break at Unicode line-break opportunities.
+        wrap_anywhere ///< Also break inside a word when the word itself is too wide.
+    };
+
+
+    /// Horizontal alignment for text inside its content box. \c justify
+    /// expands spaces so all but the last line of a paragraph reach both edges.
+    enum class text_alignment : std::uint8_t
+    {
+        left,
+        center,
+        right,
+        justify,
+    };
+
+
     /// Weights use CSS and OpenType numbers, so the underlying type can hold
     /// intermediate values such as 550.
     enum class font_weight : std::uint16_t

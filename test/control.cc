@@ -110,6 +110,11 @@ const boost::ut::suite control_tests = []
         expect(eq(next_offset(joined, 0), joined.size()));
         expect(eq(previous_offset(joined, joined.size()), 0_u));
 
+        // A trailing joiner still belongs to the cluster before it.
+        const auto trailing_joiner = std::string_view { "a\xE2\x80\x8D" };
+        expect(eq(next_offset(trailing_joiner, 0), trailing_joiner.size()));
+        expect(eq(previous_offset(trailing_joiner, trailing_joiner.size()), 0_u));
+
         // A regional-indicator flag pair.
         const auto flag = std::string_view { "\xF0\x9F\x87\xBA\xF0\x9F\x87\xB8" };
         expect(eq(next_offset(flag, 0), flag.size()));

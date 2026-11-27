@@ -165,11 +165,21 @@ namespace
 
 
     [[nodiscard]]
+    auto effective_width_limit(const node_data &node, std::optional<float> width_limit)
+        -> std::optional<float>
+    {
+        if (node.wrap == sleet::widget::text_wrap_mode::no_wrap) return std::nullopt;
+        return width_limit;
+    }
+
+
+    [[nodiscard]]
     auto measure_text_node(const node_data     &node,
                            const text_measurer &measure,
                            std::optional<float> width_limit) -> kei::result<vec2>
     {
-        auto content = measure(node.text, node.font, width_limit);
+        auto content
+            = measure(node.text, node.font, effective_width_limit(node, width_limit), node.wrap);
         if (!content) return std::move(content.error()).unexpected();
 
         vec2 outer {
@@ -270,7 +280,8 @@ namespace
         else if (available_width)
             limit = clamp0(*available_width - node.padding.horizontal());
 
-        auto measured_size = measure(node.text, node.font, limit);
+        auto measured_size
+            = measure(node.text, node.font, effective_width_limit(node, limit), node.wrap);
         if (!measured_size) return std::move(measured_size.error()).unexpected();
 
         if (width_fit) size.x = clamp0(measured_size->x + node.padding.horizontal());
@@ -512,9 +523,8 @@ namespace
             const auto  cross_space = size_axis(m_content_size, m_cross)
                                     - size_axis(child_size, m_cross)
                                     - margin_axis(child.margin, m_cross);
-            const auto  cross_align
-                = child.align_self.value_or(m_cross == axis::width ? m_node.alignment.x
-                                                                  : m_node.alignment.y);
+            const auto  cross_align = child.align_self.value_or(
+                m_cross == axis::width ? m_node.alignment.x : m_node.alignment.y);
 
             auto position = vec2 {};
             set_axis(position, m_main, cursor + leading_margin(child.margin, m_main));
@@ -953,4 +963,23 @@ auto sleet::widget::calculate_layout(const node_data     &root,
                      { return first.z_index < second.z_index; });
 
     return out;
+}
+
+
+auto sleet::widget::calculate_layout(const node_data           &root,
+                                     const basic_text_measurer &measure_text,
+                                     math::vec2 viewport) -> kei::result<layout_result>
+{
+    if (!measure_text)
+        return sleet::error { "calculate_layout requires a text measurer." }.unexpected();
+
+    text_measurer adapted = [measure_text](std::string_view text, const font_spec &font,
+                                           std::optional<float>          width_limit,
+                                           sleet::widget::text_wrap_mode wrap) -> kei::result<vec2>
+    {
+        if (wrap == sleet::widget::text_wrap_mode::no_wrap) width_limit.reset();
+        return measure_text(text, font, width_limit);
+    };
+
+    return calculate_layout(root, adapted, viewport);
 }

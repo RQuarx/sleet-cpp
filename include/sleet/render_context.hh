@@ -60,7 +60,9 @@ namespace sleet
         [[nodiscard]]
         auto measure_text(std::string_view         text,
                           const widget::font_spec &font,
-                          std::optional<float>     width_limit) -> kei::result<math::vec2>;
+                          std::optional<float>     width_limit,
+                          widget::text_wrap_mode   wrap = widget::text_wrap_mode::wrap)
+            -> kei::result<math::vec2>;
 
         [[nodiscard]]
         auto render(const widget::node_data &root, const widget::layout_result &layout)
@@ -117,6 +119,16 @@ namespace sleet
         void set_preedit(std::optional<widget::widget_id> id,
                          std::string                      text,
                          std::size_t                      caret) noexcept;
+
+        /// Returns the caret rectangle of a text input in logical window
+        /// coordinates. The runtime uses it to place IME candidate windows.
+        /// \return The caret rectangle, or \c std::nullopt when the node is not
+        /// a text input or its font cannot be measured.
+        [[nodiscard]]
+        auto text_input_caret_rect(const widget::node_data      &node,
+                                   const math::rect             &bounds,
+                                   const widget::text_selection &selection)
+            -> std::optional<math::rect>;
 
     private:
         struct impl;

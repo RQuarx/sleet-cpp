@@ -20,23 +20,30 @@ const boost::ut::suite node_tests = []
     "copy and move preserve every layout field"_test = []
     {
         auto original = box()[column()[label("hello") | margin(2.F)] | gap(3.F)] | gap(7.F)
-                      | padding(5.F) | margin(1.F) | flex(2.F);
+                      | padding(5.F) | margin(1.F) | flex(2.F) | text_wrap(text_wrap_mode::no_wrap)
+                      | text_align(text_alignment::right);
 
         const auto data = std::move(original).release();
         expect(eq(data.gap, 7.F));
         expect(eq(data.padding.top, 5.F));
         expect(eq(data.margin.left, 1.F));
         expect(eq(data.flex, 2.F));
+        expect(data.wrap == text_wrap_mode::no_wrap);
+        expect(data.text_align == text_alignment::right);
 
         auto copy = data;
         expect(eq(copy.gap, 7.F));
         expect(eq(copy.padding.top, 5.F));
         expect(copy.children[0].parent == &copy);
         expect(eq(copy.children[0].gap, 3.F));
+        expect(copy.wrap == text_wrap_mode::no_wrap);
+        expect(copy.text_align == text_alignment::right);
 
         auto moved = std::move(copy);
         expect(eq(moved.gap, 7.F));
         expect(moved.children[0].parent == &moved);
+        expect(moved.wrap == text_wrap_mode::no_wrap);
+        expect(moved.text_align == text_alignment::right);
     };
 
     "deep copies keep every parent pointer inside the copy"_test = []

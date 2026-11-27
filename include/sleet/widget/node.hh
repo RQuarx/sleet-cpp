@@ -89,6 +89,15 @@ namespace sleet::widget
         node_data *parent = nullptr;
         font_spec  font;
 
+        /// How text nodes break lines when the content box is narrower than
+        /// the text. \c no_wrap keeps one line per paragraph and lets the
+        /// renderer clip the overflow.
+        text_wrap_mode wrap = text_wrap_mode::wrap;
+
+        /// Overrides \c alignment.x for text. \c std::nullopt falls back to it,
+        /// so \c halign keeps working as a shorthand.
+        std::optional<text_alignment> text_align;
+
         float gap = 0.F;
 
         math::vec2_of<align> alignment { align::start, align::start };

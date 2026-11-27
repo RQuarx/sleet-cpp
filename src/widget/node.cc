@@ -58,6 +58,8 @@ namespace
         self.padding          = std::forward<Other>(other).padding;
         self.origin           = std::forward<Other>(other).origin;
         self.font             = std::forward<Other>(other).font;
+        self.wrap             = std::forward<Other>(other).wrap;
+        self.text_align       = std::forward<Other>(other).text_align;
         self.gap              = std::forward<Other>(other).gap;
         self.alignment        = std::forward<Other>(other).alignment;
         self.main_axis        = std::forward<Other>(other).main_axis;

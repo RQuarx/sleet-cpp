@@ -680,6 +680,14 @@ namespace sleet
         /// Whether SDL text input is currently enabled for the window.
         bool m_text_input_active = false;
 
+        /// Whether an IME candidate area is currently registered.
+        bool m_text_input_area_set = false;
+
+        /// Last area registered with the platform IME. Skipping identical
+        /// updates keeps candidate windows from being repositioned every frame.
+        SDL_Rect m_text_input_area {};
+        int      m_text_input_cursor = 0;
+
         struct toast_entry
         {
             std::string text;
@@ -886,12 +894,69 @@ namespace sleet
 
             if (should_enable == m_text_input_active) return;
 
+            // Starting or stopping text input clears the platform's candidate
+            // area, so the next present must register it again.
+            m_text_input_area_set = false;
+
             if (should_enable)
                 m_text_input_active = SDL_StartTextInput(m_window.get());
             else
             {
                 SDL_StopTextInput(m_window.get());
                 m_text_input_active = false;
+            }
+        }
+
+
+        /// Tells the platform IME where the focused field and caret are. Native
+        /// candidate windows use this to avoid covering the text being edited.
+        void sync_text_input_area(session &current, render_context &context)
+        {
+            const auto *focused = current.focused ? find_node(current, *current.focused) : nullptr;
+
+            const auto editable = m_text_input_active and focused != nullptr
+                              and focused->control == widget::control_kind::text_input
+                              and current.layout;
+
+            if (!editable)
+            {
+                if (m_text_input_area_set)
+                {
+                    SDL_SetTextInputArea(m_window.get(), nullptr, 0);
+                    m_text_input_area_set = false;
+                }
+                return;
+            }
+
+            const auto bounds = current.layout->rects.find(focused->id);
+            if (bounds == current.layout->rects.end()) return;
+
+            const auto caret = context.text_input_caret_rect(*focused, bounds->second,
+                                                             current.edits[focused->id]);
+
+            const SDL_Rect area {
+                .x = static_cast<int>(std::floor(bounds->second.position.x)),
+                .y = static_cast<int>(std::floor(bounds->second.position.y)),
+                .w = std::max(0, static_cast<int>(std::ceil(bounds->second.size.x))),
+                .h = std::max(0, static_cast<int>(std::ceil(bounds->second.size.y))),
+            };
+
+            const auto cursor = caret
+                                  ? std::clamp(static_cast<int>(std::lround(
+                                                   caret->position.x - static_cast<float>(area.x))),
+                                               0, area.w)
+                                  : 0;
+
+            if (m_text_input_area_set and area.x == m_text_input_area.x
+                and area.y == m_text_input_area.y and area.w == m_text_input_area.w
+                and area.h == m_text_input_area.h and cursor == m_text_input_cursor)
+                return;
+
+            if (SDL_SetTextInputArea(m_window.get(), &area, cursor))
+            {
+                m_text_input_area     = area;
+                m_text_input_cursor   = cursor;
+                m_text_input_area_set = true;
             }
         }
 
@@ -1780,6 +1845,7 @@ namespace sleet
                 // focus; otherwise the field would lose focus mid-composition.
                 if (current.preedit_id)
                 {
+                    SDL_ClearComposition(m_window.get());
                     current.preedit_id.reset();
                     current.preedit_text.clear();
                     current.preedit_caret = 0;
@@ -2856,7 +2922,6 @@ namespace sleet
             ensure_visible(current, *current.layout);
             current.scroll_animating
                 = apply_scroll_offsets(current, *current.tree, *current.layout, delta_seconds);
-            sync_text_input(current);
 
             return true;
         }
@@ -2942,6 +3007,12 @@ namespace sleet
                 context.set_preedit(std::nullopt, {}, 0);
             }
 
+            // Focus changes can arrive through reflow as well as rebuild, so
+            // the platform text-input state is synchronized here, where every
+            // presented frame passes.
+            sync_text_input(current);
+            sync_text_input_area(current, context);
+
             if (auto result = context.render(*current.tree, *current.layout); !result)
             {
                 std::println(stderr, "sleet: render failed: {}", result.error().what());
@@ -2986,9 +3057,10 @@ namespace sleet
             session current { std::move(booted->first) };
             current.messages.push_back(std::move(booted->second));
 
-            const auto measure = [&context](std::string_view text, const widget::font_spec &font,
-                                            std::optional<float> width_limit)
-            { return context.measure_text(text, font, width_limit); };
+            const auto measure
+                = [&context](std::string_view text, const widget::font_spec &font,
+                             std::optional<float> width_limit, widget::text_wrap_mode wrap)
+            { return context.measure_text(text, font, width_limit, wrap); };
 
             auto last_tick = SDL_GetTicks();
 

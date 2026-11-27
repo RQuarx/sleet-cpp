@@ -1,1 +1,1 @@
-text_src = files('ustring.cc', 'line_breaking.cc', 'wrap.cc')
+text_src = files('ustring.cc', 'grapheme.cc', 'line_breaking.cc', 'wrap.cc')

@@ -17,7 +17,15 @@ if (!text) { /* invalid UTF-8 */ }
 
 ## Line breaking and wrapping
 
+`txt::clamp_offset`, `txt::previous_offset`, and `txt::next_offset` move caret
+offsets by grapheme cluster, keeping combining marks, emoji modifiers, ZWJ
+sequences, and regional-indicator flags together.
+
 `txt::break_opportunity::of` exposes libunibreak's Unicode line-break
 opportunities. `txt::wrap` splits text at the last break that fits while
-preserving mandatory newlines. See [[Layout]] for how wrapping integrates with
-layout and [[Rendering-and-Themes]] for text rasterization through SDL3_ttf.
+preserving mandatory newlines. Pass `break_anywhere = true` to split an
+unbreakable word at grapheme boundaries instead of letting it overflow. Each
+`wrapped_line` reports whether it ends at a mandatory break (or the end of the
+text), which justified alignment uses to keep paragraph-final lines short. See
+[[Layout]] for how wrapping integrates with layout and
+[[Rendering-and-Themes]] for text rasterization through SDL3_ttf.

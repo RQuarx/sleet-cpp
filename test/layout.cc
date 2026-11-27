@@ -24,10 +24,13 @@ namespace
 
     /// A deterministic measurer. Every byte is 10 px wide and every line is
     /// 20 px tall.
-    auto measure(std::string_view text, const font_spec &, std::optional<float> width_limit)
-        -> kei::result<vec2>
+    auto measure(std::string_view text,
+                 const font_spec &,
+                 std::optional<float>          width_limit,
+                 sleet::widget::text_wrap_mode wrap) -> kei::result<vec2>
     {
         if (text.empty()) return vec2 { 0.F, 0.F };
+        if (wrap == sleet::widget::text_wrap_mode::no_wrap) width_limit.reset();
 
         float       line_width = 0.F;
         float       max_width  = 0.F;
@@ -224,8 +227,8 @@ const boost::ut::suite layout_tests = []
         auto tree = to_data(column()[label("hidden") | visible(false)] | size(100.F, 100.F));
         expect(static_cast<bool>(tree.finalize()));
 
-        const auto failing
-            = [](std::string_view, const font_spec &, std::optional<float>) -> kei::result<vec2>
+        const auto failing = [](std::string_view, const font_spec &, std::optional<float>,
+                                sleet::widget::text_wrap_mode) -> kei::result<vec2>
         { return sleet::error { "hidden text was measured" }.unexpected(); };
 
         const auto result = calculate_layout(tree, failing, { 100.F, 100.F });
@@ -304,6 +307,62 @@ const boost::ut::suite layout_tests = []
         expect(static_cast<bool>(result));
         expect(eq(result->root.size.x, 50.F));
         expect(eq(result->root.size.y, 40.F));
+    };
+
+    "no-wrap text keeps one line inside a fixed width"_test = []
+    {
+        auto tree = column()[label("aaaa bbbb") | id("text") | width(50.F)
+                             | text_wrap(text_wrap_mode::no_wrap)];
+
+        const auto  result = layout_of(tree);
+        const auto *text   = result.find("text");
+        expect(text != nullptr);
+        expect(eq(text->size.x, 50.F));
+        expect(eq(text->size.y, 20.F));
+    };
+
+    "wrap-anywhere text splits a word that is too wide"_test = []
+    {
+        auto tree = column()[label("abcdefghij") | id("text") | width(50.F)
+                             | text_wrap(text_wrap_mode::wrap_anywhere)];
+
+        const auto  result = layout_of(tree);
+        const auto *text   = result.find("text");
+        expect(text != nullptr);
+        expect(eq(text->size.x, 50.F));
+        expect(eq(text->size.y, 40.F));
+    };
+
+    "text alignment does not change layout"_test = []
+    {
+        auto tree = column()[label("aaaa bbbb") | id("text") | width(50.F)
+                             | text_align(text_alignment::right)];
+
+        const auto  result = layout_of(tree);
+        const auto *text   = result.find("text");
+        expect(text != nullptr);
+        expect(eq(text->size.x, 50.F));
+        expect(eq(text->size.y, 40.F));
+    };
+
+    "layout forwards the wrap mode to the measurer"_test = []
+    {
+        auto seen = std::optional<text_wrap_mode> {};
+
+        const auto recording = [&seen](std::string_view, const font_spec &, std::optional<float>,
+                                       text_wrap_mode mode) -> kei::result<vec2>
+        {
+            seen = mode;
+            return vec2 { 10.F, 10.F };
+        };
+
+        auto tree = to_data(label("x") | width(sizing::fill())
+                            | text_wrap(text_wrap_mode::wrap_anywhere));
+        expect(static_cast<bool>(tree.finalize()));
+
+        const auto result = calculate_layout(tree, recording, { 50.F, 50.F });
+        expect(static_cast<bool>(result));
+        expect(seen == text_wrap_mode::wrap_anywhere);
     };
 
     "fit-width text wraps inside a fixed-width column"_test = []

@@ -88,6 +88,8 @@ box()[label("Hello")]
 | `ensure_visible(bool)` | Scroll ancestors to reveal the node when it gains focus |
 | `disabled(bool)` | Remove a subtree from focus and input; disabled widgets are not pointer targets |
 | `text_size`, `text_weight`, `text_role`, `text_color`, `text_decoration` | Text styling |
+| `text_wrap(mode)` | `no_wrap`, `wrap`, or `wrap_anywhere` for constrained text |
+| `text_align(alignment)` | `left`, `center`, `right`, or `justify` text without changing child layout |
 | `background`, `foreground`, `border`, `border_width` | Visual styling |
 | `radius(px)` | Override the theme's corner radius |
 | `on_click("action")` | Attach an action name for event mapping |

@@ -14,10 +14,18 @@
 namespace sleet::widget
 {
     /// Measures text for \c calculate_layout. \c text is the string to measure,
-    /// \c font selects the face and style, and \c width_limit asks for wrapping
-    /// when it has a value. The result is the text size in logical pixels,
-    /// including any line wrapping.
+    /// \c font selects the face and style, \c width_limit asks for wrapping
+    /// when it has a value, and \c wrap selects the wrapping strategy. The
+    /// result is the text size in logical pixels, including any line wrapping.
     using text_measurer = std::function<
+        auto(std::string_view, const font_spec &, std::optional<float>, text_wrap_mode)
+            ->kei::result<math::vec2>>;
+
+
+    /// The original three-argument measurer. It is adapted to \c text_measurer
+    /// and cannot split words; \c text_wrap_mode::wrap_anywhere falls back to
+    /// ordinary wrapping.
+    using basic_text_measurer = std::function<
         auto(std::string_view, const font_spec &, std::optional<float>)->kei::result<math::vec2>>;
 
 
@@ -70,4 +78,11 @@ namespace sleet::widget
     auto calculate_layout(const node_data     &root,
                           const text_measurer &measure_text,
                           math::vec2           viewport) -> kei::result<layout_result>;
+
+
+    /// Compatibility overload for the original three-argument measurer.
+    [[nodiscard]]
+    auto calculate_layout(const node_data           &root,
+                          const basic_text_measurer &measure_text,
+                          math::vec2                 viewport) -> kei::result<layout_result>;
 }

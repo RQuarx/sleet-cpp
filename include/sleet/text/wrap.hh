@@ -13,6 +13,11 @@ namespace sleet::txt
     {
         std::string_view text;
         float            width = 0.F;
+
+        /// True when the line ends at a mandatory break or at the end of the
+        /// text. Justified alignment leaves these lines at their natural
+        /// width.
+        bool hard_break = false;
     };
 
 
@@ -28,9 +33,12 @@ namespace sleet::txt
     /// \param max_width The maximum line width, or \c std::nullopt to disable
     /// wrapping.
     /// \param measure_line Measures the width of a candidate line.
+    /// \param break_anywhere When true, a word that does not fit is split at a
+    /// grapheme boundary instead of overflowing the limit.
     /// \return The wrapped lines, or an error from \p measure_line.
     [[nodiscard]]
     auto wrap(std::string_view     text,
               std::optional<float> max_width,
-              const line_measurer &measure_line) -> kei::result<std::vector<wrapped_line>>;
+              const line_measurer &measure_line,
+              bool break_anywhere = false) -> kei::result<std::vector<wrapped_line>>;
 }

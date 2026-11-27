@@ -27,6 +27,8 @@ namespace
     using sleet::widget::font_role;
     using sleet::widget::font_spec;
     using sleet::widget::node_data;
+    using sleet::widget::text_alignment;
+    using sleet::widget::text_wrap_mode;
 
 
     [[nodiscard]]
@@ -72,6 +74,39 @@ namespace
         }
 
         return 0.F;
+    }
+
+
+    [[nodiscard]]
+    auto text_align_offset(text_alignment alignment, float free_space) noexcept -> float
+    {
+        const auto free = std::max(0.F, free_space);
+
+        switch (alignment)
+        {
+        case text_alignment::left:    return 0.F;
+        case text_alignment::center:  return free / 2.F;
+        case text_alignment::right:   return free;
+        case text_alignment::justify: return 0.F;
+        }
+
+        return 0.F;
+    }
+
+
+    [[nodiscard]]
+    auto resolved_text_alignment(const node_data &node) noexcept -> text_alignment
+    {
+        if (node.text_align) return *node.text_align;
+
+        switch (node.alignment.x)
+        {
+        case sleet::widget::align::start:  return text_alignment::left;
+        case sleet::widget::align::center: return text_alignment::center;
+        case sleet::widget::align::end:    return text_alignment::right;
+        }
+
+        return text_alignment::left;
     }
 
 
@@ -153,8 +188,9 @@ namespace
 
     struct wrap_key
     {
-        std::string text;
-        TTF_Font   *font = nullptr;
+        std::string    text;
+        TTF_Font      *font = nullptr;
+        text_wrap_mode wrap = text_wrap_mode::wrap;
 
         /// Negative means "no width limit". Real limits are clamped to >= 0.
         float width_limit = -1.F;
@@ -165,6 +201,7 @@ namespace
     {
         std::string_view text;
         TTF_Font        *font        = nullptr;
+        text_wrap_mode   wrap        = text_wrap_mode::wrap;
         float            width_limit = -1.F;
     };
 
@@ -177,6 +214,8 @@ namespace
         [[nodiscard]]
         auto operator()(const Lhs &lhs, const Rhs &rhs) const noexcept -> bool
         {
+            if (lhs.wrap != rhs.wrap)
+                return static_cast<int>(lhs.wrap) < static_cast<int>(rhs.wrap);
             if (lhs.width_limit != rhs.width_limit) return lhs.width_limit < rhs.width_limit;
             if (lhs.font != rhs.font) return std::less<const TTF_Font *> {}(lhs.font, rhs.font);
             return std::string_view { lhs.text } < rhs.text;
@@ -827,16 +866,20 @@ struct sleet::render_context::impl
     /// same lines every frame, so repeating line breaking and glyph
     /// measurement was pure overhead.
     [[nodiscard]]
-    auto
-    wrapped_lines(const font_spec &spec, std::string_view text, std::optional<float> width_limit)
+    auto wrapped_lines(const font_spec     &spec,
+                       std::string_view     text,
+                       std::optional<float> width_limit,
+                       text_wrap_mode       wrap)
         -> kei::result<const std::vector<sleet::txt::wrapped_line> *>
     {
         auto primary = get_font(spec);
         if (!primary) return std::move(primary.error()).unexpected();
 
-        const auto limit
+        auto limit
             = width_limit.transform([](float width) noexcept { return std::max(0.F, width); });
-        const auto lookup = wrap_key_view { text, *primary, limit.value_or(-1.F) };
+        if (wrap == text_wrap_mode::no_wrap) limit.reset();
+
+        const auto lookup = wrap_key_view { text, *primary, wrap, limit.value_or(-1.F) };
 
         if (auto it = wrap_cache.find(lookup); it != wrap_cache.end())
         {
@@ -861,7 +904,7 @@ struct sleet::render_context::impl
         }
 
         auto [it, inserted] = wrap_cache.emplace(
-            wrap_key { std::string { text }, *primary, lookup.width_limit }, wrap_entry {});
+            wrap_key { std::string { text }, *primary, wrap, lookup.width_limit }, wrap_entry {});
         (void)inserted;
 
         const auto measure = [this, &spec](std::string_view line) -> kei::result<float>
@@ -871,7 +914,8 @@ struct sleet::render_context::impl
             return measure_line(*font, line);
         };
 
-        auto lines = sleet::txt::wrap(it->first.text, limit, measure);
+        auto lines = sleet::txt::wrap(it->first.text, limit, measure,
+                                      wrap == text_wrap_mode::wrap_anywhere);
         if (!lines)
         {
             wrap_cache.erase(it);
@@ -1251,35 +1295,26 @@ struct sleet::render_context::impl
     }
 
 
+    /// Draws one run of text and returns its logical advance width. The width
+    /// comes from the cached texture, so justified lines do not shape every
+    /// word a second time just to advance the pen.
     [[nodiscard]]
-    auto draw_text_line(const node_data         &node,
-                        const rect              &content,
-                        const font_spec         &spec,
-                        color                    fg,
-                        const txt::wrapped_line &line,
-                        std::size_t              index,
-                        float                    line_height,
-                        float                    y_offset) -> kei::result<>
+    auto draw_text_run(
+        std::string_view text, TTF_Font *font, color fg, float x, float top, float line_height)
+        -> kei::result<float>
     {
-        if (line.text.empty()) return {};
+        if (text.empty()) return 0.F;
 
-        auto font = get_font_covering(spec, line.text);
-        if (!font) return std::move(font.error()).unexpected();
-
-        auto entry = get_text_texture(line.text, *font, fg);
+        auto entry = get_text_texture(text, font, fg);
         if (!entry) return std::move(entry.error()).unexpected();
 
         const auto logical_height = (*entry)->size.y / pixel_scale;
-        const auto x_offset       = align_offset(node.alignment.x, content.size.x - line.width);
-        const auto x              = (content.position.x + x_offset) * pixel_scale;
-        const auto y = (content.position.y + y_offset + (line_height * static_cast<float>(index))
-                        + ((line_height - logical_height) / 2.F))
-                     * pixel_scale;
+        const auto y              = (top + ((line_height - logical_height) / 2.F)) * pixel_scale;
 
         // Snapping the glyph texture to a physical pixel keeps the rasterized
         // glyphs crisp instead of resampling them at a fractional offset.
         const SDL_FRect destination {
-            std::round(x),
+            std::round(x * pixel_scale),
             std::round(y),
             (*entry)->size.x,
             (*entry)->size.y,
@@ -1288,6 +1323,83 @@ struct sleet::render_context::impl
         if (!SDL_RenderTexture(renderer, (*entry)->texture, nullptr, &destination))
             return sleet::sdl_error { "Failed to draw text." }.unexpected();
 
+        return (*entry)->size.x / pixel_scale;
+    }
+
+
+    /// Draws a line word by word, expanding its spaces so the line reaches the
+    /// right edge. Only spaces are stretched; glyph shapes are untouched.
+    [[nodiscard]]
+    auto draw_justified_line(std::string_view text,
+                             TTF_Font        *font,
+                             color            fg,
+                             const rect      &content,
+                             float            line_width,
+                             float            top,
+                             float            line_height) -> kei::result<>
+    {
+        const auto gaps  = static_cast<float>(std::count(text.begin(), text.end(), ' '));
+        const auto extra = content.size.x - line_width;
+        if (gaps <= 0.F or extra <= 0.F) return {};
+
+        auto space_width = measure_line(font, " ");
+        if (!space_width) return std::move(space_width.error()).unexpected();
+
+        const auto extra_per_gap = extra / gaps;
+        auto       x             = content.position.x;
+        auto       position      = std::size_t { 0 };
+
+        while (position < text.size())
+        {
+            const auto space = text.find(' ', position);
+            const auto word
+                = text.substr(position, space == std::string_view::npos ? std::string_view::npos
+                                                                        : space - position);
+
+            if (!word.empty())
+            {
+                auto width = draw_text_run(word, font, fg, x, top, line_height);
+                if (!width) return std::move(width.error()).unexpected();
+                x += *width;
+            }
+
+            if (space == std::string_view::npos) break;
+
+            x       += *space_width + extra_per_gap;
+            position = space + 1;
+        }
+
+        return {};
+    }
+
+
+    [[nodiscard]]
+    auto draw_text_line(const rect              &content,
+                        const font_spec         &spec,
+                        color                    fg,
+                        const txt::wrapped_line &line,
+                        std::size_t              index,
+                        float                    line_height,
+                        float                    y_offset,
+                        text_alignment           alignment) -> kei::result<>
+    {
+        if (line.text.empty()) return {};
+
+        auto font = get_font_covering(spec, line.text);
+        if (!font) return std::move(font.error()).unexpected();
+
+        const auto top = content.position.y + y_offset + (line_height * static_cast<float>(index));
+
+        if (alignment == text_alignment::justify and !line.hard_break
+            and line.width < content.size.x
+            and std::count(line.text.begin(), line.text.end(), ' ') > 0)
+            return draw_justified_line(line.text, *font, fg, content, line.width, top, line_height);
+
+        const auto x
+            = content.position.x + text_align_offset(alignment, content.size.x - line.width);
+
+        auto drawn = draw_text_run(line.text, *font, fg, x, top, line_height);
+        if (!drawn) return std::move(drawn.error()).unexpected();
         return {};
     }
 
@@ -1298,7 +1410,8 @@ struct sleet::render_context::impl
                          const font_spec                      &spec,
                          TTF_Font                             *font,
                          color                                 fg,
-                         const std::vector<txt::wrapped_line> &lines) -> kei::result<>
+                         const std::vector<txt::wrapped_line> &lines,
+                         text_alignment                        alignment) -> kei::result<>
     {
         const auto line_height
             = static_cast<float>(std::max(1, TTF_GetFontHeight(font))) / pixel_scale;
@@ -1307,7 +1420,7 @@ struct sleet::render_context::impl
 
         for (std::size_t i = 0; i < lines.size(); i++)
             if (auto res
-                = draw_text_line(node, content, spec, fg, lines[i], i, line_height, y_offset);
+                = draw_text_line(content, spec, fg, lines[i], i, line_height, y_offset, alignment);
                 !res)
                 return res;
 
@@ -1319,30 +1432,47 @@ struct sleet::render_context::impl
     {
         float scroll  = 0.F;
         float caret_x = 0.F;
+        float offset  = 0.F;
     };
 
 
     [[nodiscard]]
-    auto text_input_caret(TTF_Font *font, std::string_view text, float available_width)
-        -> kei::result<text_input_view>
+    auto text_input_caret(TTF_Font                     *font,
+                          std::string_view              text,
+                          float                         available_width,
+                          const widget::text_selection &sel,
+                          text_alignment                alignment,
+                          float trailing_width = 0.F) -> kei::result<text_input_view>
     {
-        const auto offset = widget::clamp_offset(text, selection.caret);
+        const auto offset = widget::clamp_offset(text, sel.caret);
         auto       width  = measure_line(font, text.substr(0, offset));
         if (!width) return std::move(width.error()).unexpected();
 
+        auto total = measure_line(font, text);
+        if (!total) return std::move(total.error()).unexpected();
+
         text_input_view view { .caret_x = *width };
-        const auto      overflow = view.caret_x - available_width + 2.F;
-        if (overflow > 0.F) view.scroll = overflow;
+
+        if (*total + trailing_width <= available_width)
+            view.offset = text_align_offset(alignment, available_width - *total - trailing_width);
+        else
+        {
+            const auto overflow
+                = view.offset + view.caret_x + trailing_width - available_width + 2.F;
+            if (overflow > 0.F) view.scroll = overflow;
+        }
+
         return view;
     }
 
 
     [[nodiscard]]
-    auto text_selection_span(TTF_Font *font, std::string_view text)
+    auto
+    text_selection_span(TTF_Font *font, std::string_view text, const widget::text_selection &sel)
         -> kei::result<std::pair<float, float>>
     {
-        const auto first = widget::clamp_offset(text, selection.begin());
-        const auto last  = widget::clamp_offset(text, selection.end());
+        const auto first = widget::clamp_offset(text, sel.begin());
+        const auto last  = widget::clamp_offset(text, sel.end());
 
         auto first_width = measure_line(font, text.substr(0, first));
         if (!first_width) return std::move(first_width.error()).unexpected();
@@ -1356,18 +1486,21 @@ struct sleet::render_context::impl
 
 
     [[nodiscard]]
-    auto
-    draw_text_selection(const rect &content, TTF_Font *font, std::string_view text, float scroll)
-        -> kei::result<>
+    auto draw_text_selection(const rect                   &content,
+                             TTF_Font                     *font,
+                             std::string_view              text,
+                             const widget::text_selection &sel,
+                             float                         offset,
+                             float                         scroll) -> kei::result<>
     {
-        if (!selection.has_selection() or text.empty()) return {};
+        if (!sel.has_selection() or text.empty()) return {};
 
-        auto span = text_selection_span(font, text);
+        auto span = text_selection_span(font, text, sel);
         if (!span) return std::move(span.error()).unexpected();
 
         const auto [x1, x2] = *span;
         const rect highlight {
-            content.position.x + x1 - scroll,
+            content.position.x + offset + x1 - scroll,
             content.position.y + 2.F,
             x2 - x1,
             std::max(0.F, content.size.y - 4.F),
@@ -1394,6 +1527,9 @@ struct sleet::render_context::impl
         const auto text_color
             = text.empty() ? (is_disabled(node) ? fg : theme.muted.value_or(fg)) : fg;
 
+        auto alignment = resolved_text_alignment(node);
+        if (alignment == text_alignment::justify) alignment = text_alignment::left;
+
         auto font = get_font_covering(node.font, display);
         if (!font) return std::move(font.error()).unexpected();
 
@@ -1408,16 +1544,45 @@ struct sleet::render_context::impl
             return restored;
         };
 
-        auto view = text_input_view {};
-        if (is_editing)
+        auto        preedit_width  = 0.F;
+        TTF_Font   *preedit_font   = nullptr;
+        text_entry *preedit_entry  = nullptr;
+        auto        preedit_prefix = 0.F;
+
+        if (has_preedit)
         {
-            auto computed = text_input_caret(*font, text, content.size.x);
+            auto resolved = get_font_covering(node.font, preedit_text);
+            if (!resolved) return restore_after(std::move(resolved.error()).unexpected());
+            preedit_font = *resolved;
+
+            auto entry = get_text_texture(preedit_text, preedit_font, fg);
+            if (!entry) return restore_after(std::move(entry.error()).unexpected());
+            preedit_entry = *entry;
+
+            auto width = measure_line(preedit_font, preedit_text);
+            if (!width) return restore_after(std::move(width.error()).unexpected());
+            preedit_width = *width;
+
+            const auto caret_offset = widget::clamp_offset(preedit_text, preedit_caret);
+            auto prefix = measure_line(preedit_font,
+                                       std::string_view { preedit_text }.substr(0, caret_offset));
+            if (!prefix) return restore_after(std::move(prefix.error()).unexpected());
+            preedit_prefix = *prefix;
+        }
+
+        auto view = text_input_view {};
+        {
+            auto computed = text_input_caret(*font, is_editing ? text : display, content.size.x,
+                                             is_editing ? selection : widget::text_selection {},
+                                             alignment, preedit_width);
             if (!computed) return restore_after(std::move(computed.error()).unexpected());
             view = *computed;
         }
 
         if (is_editing)
-            if (auto res = draw_text_selection(content, *font, text, view.scroll); !res)
+            if (auto res
+                = draw_text_selection(content, *font, text, selection, view.offset, view.scroll);
+                !res)
                 return restore_after(std::move(res));
 
         if (!display.empty())
@@ -1427,7 +1592,7 @@ struct sleet::render_context::impl
 
             const auto      logical_height = (*entry)->size.y / pixel_scale;
             const SDL_FRect destination {
-                std::round((content.position.x - view.scroll) * pixel_scale),
+                std::round((content.position.x + view.offset - view.scroll) * pixel_scale),
                 std::round((content.position.y + ((content.size.y - logical_height) / 2.F))
                            * pixel_scale),
                 (*entry)->size.x,
@@ -1442,48 +1607,41 @@ struct sleet::render_context::impl
 
         if (has_preedit)
         {
-            auto preedit_font = get_font_covering(node.font, preedit_text);
-            if (!preedit_font) return restore_after(std::move(preedit_font.error()).unexpected());
-
-            auto preedit = get_text_texture(preedit_text, *preedit_font, fg);
-            if (!preedit) return restore_after(std::move(preedit.error()).unexpected());
-
-            const auto caret_offset = widget::clamp_offset(preedit_text, preedit_caret);
-            auto       prefix_width = measure_line(
-                *preedit_font, std::string_view { preedit_text }.substr(0, caret_offset));
-            if (!prefix_width) return restore_after(std::move(prefix_width.error()).unexpected());
-
-            auto width = measure_line(*preedit_font, preedit_text);
-            if (!width) return restore_after(std::move(width.error()).unexpected());
-
-            const auto      logical_height = (*preedit)->size.y / pixel_scale;
+            const auto      logical_height = preedit_entry->size.y / pixel_scale;
             const SDL_FRect destination {
-                std::round((content.position.x + caret_x - view.scroll) * pixel_scale),
+                std::round((content.position.x + view.offset + caret_x - view.scroll)
+                           * pixel_scale),
                 std::round((content.position.y + ((content.size.y - logical_height) / 2.F))
                            * pixel_scale),
-                (*preedit)->size.x,
-                (*preedit)->size.y,
+                preedit_entry->size.x,
+                preedit_entry->size.y,
             };
 
-            if (!SDL_RenderTexture(renderer, (*preedit)->texture, nullptr, &destination))
+            if (!SDL_RenderTexture(renderer, preedit_entry->texture, nullptr, &destination))
                 return restore_after(sleet::sdl_error { "Failed to draw text." }.unexpected());
 
             const rect underline {
-                content.position.x + caret_x - view.scroll,
+                content.position.x + view.offset + caret_x - view.scroll,
                 content.position.y + content.size.y - 2.F,
-                *width,
+                preedit_width,
                 1.F,
             };
             if (auto res = fill_logical(underline, theme.caret.value_or(fg)); !res)
                 return restore_after(std::move(res));
 
-            caret_x += *prefix_width;
+            caret_x += preedit_prefix;
         }
 
         if (is_editing)
         {
+            // A caret at the end of a full line would otherwise sit entirely
+            // outside the text clip. Keep its left edge visible.
+            const auto caret_left = std::clamp(
+                content.position.x + view.offset + caret_x - view.scroll, content.position.x,
+                content.position.x + std::max(0.F, content.size.x - 2.F));
+
             const rect caret_rect {
-                content.position.x + caret_x - view.scroll,
+                caret_left,
                 content.position.y + 2.F,
                 2.F,
                 std::max(0.F, content.size.y - 4.F),
@@ -1514,7 +1672,7 @@ struct sleet::render_context::impl
 
         if (content.size.x <= 0.F or content.size.y <= 0.F) return {};
 
-        auto lines = wrapped_lines(node.font, node.text, content.size.x);
+        auto lines = wrapped_lines(node.font, node.text, content.size.x, node.wrap);
         if (!lines) return std::move(lines.error()).unexpected();
         if ((*lines)->empty()) return {};
 
@@ -1522,7 +1680,8 @@ struct sleet::render_context::impl
         if (!clip) return std::move(clip.error()).unexpected();
         if (!*clip) return {};
 
-        auto drawn    = draw_text_lines(node, content, node.font, *font, fg, **lines);
+        auto drawn    = draw_text_lines(node, content, node.font, *font, fg, **lines,
+                                        resolved_text_alignment(node));
         auto restored = leave_text_clip(**clip);
 
         if (!drawn) return drawn;
@@ -2065,15 +2224,15 @@ auto sleet::render_context::operator=(render_context &&) noexcept -> render_cont
 
 auto sleet::render_context::measure_text(std::string_view         text,
                                          const widget::font_spec &font,
-                                         std::optional<float>     width_limit)
-    -> kei::result<math::vec2>
+                                         std::optional<float>     width_limit,
+                                         widget::text_wrap_mode   wrap) -> kei::result<math::vec2>
 {
     auto ttf_font = m_impl->get_font(font);
     if (!ttf_font) return std::move(ttf_font.error()).unexpected();
 
     if (text.empty()) return vec2 { 0.F, 0.F };
 
-    auto lines = m_impl->wrapped_lines(font, text, width_limit);
+    auto lines = m_impl->wrapped_lines(font, text, width_limit, wrap);
     if (!lines) return std::move(lines.error()).unexpected();
     if ((*lines)->empty()) return vec2 { 0.F, 0.F };
 
@@ -2205,4 +2364,56 @@ void sleet::render_context::set_preedit(std::optional<widget::widget_id> id,
     m_impl->preedit_id    = std::move(id);
     m_impl->preedit_text  = std::move(text);
     m_impl->preedit_caret = caret;
+}
+
+
+auto sleet::render_context::text_input_caret_rect(const widget::node_data      &node,
+                                                  const math::rect             &bounds,
+                                                  const widget::text_selection &selection)
+    -> std::optional<math::rect>
+{
+    if (node.control != widget::control_kind::text_input) return std::nullopt;
+
+    const auto content = bounds.inset(node.padding);
+    if (content.size.x <= 0.F or content.size.y <= 0.F) return std::nullopt;
+
+    auto font = m_impl->get_font_covering(node.font, node.text);
+    if (!font) return std::nullopt;
+
+    auto       preedit_width  = 0.F;
+    auto       preedit_prefix = 0.F;
+    const auto has_preedit
+        = m_impl->preedit_id and *m_impl->preedit_id == node.id and !m_impl->preedit_text.empty();
+    if (has_preedit)
+    {
+        auto preedit_font = m_impl->get_font_covering(node.font, m_impl->preedit_text);
+        if (!preedit_font) return std::nullopt;
+
+        auto width = m_impl->measure_line(*preedit_font, m_impl->preedit_text);
+        if (!width) return std::nullopt;
+        preedit_width = *width;
+
+        const auto caret_offset = widget::clamp_offset(m_impl->preedit_text, m_impl->preedit_caret);
+        auto       prefix       = m_impl->measure_line(
+            *preedit_font, std::string_view { m_impl->preedit_text }.substr(0, caret_offset));
+        if (!prefix) return std::nullopt;
+        preedit_prefix = *prefix;
+    }
+
+    auto alignment = resolved_text_alignment(node);
+    if (alignment == text_alignment::justify) alignment = text_alignment::left;
+
+    auto view = m_impl->text_input_caret(*font, node.text, content.size.x, selection, alignment,
+                                         preedit_width);
+    if (!view) return std::nullopt;
+
+    auto caret_x = view->offset + view->caret_x - view->scroll;
+    if (has_preedit) caret_x += preedit_prefix;
+
+    return math::rect {
+        content.position.x + caret_x,
+        content.position.y + 2.F,
+        2.F,
+        std::max(0.F, content.size.y - 4.F),
+    };
 }

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string_view>
@@ -73,9 +74,10 @@ const boost::ut::suite render_tests = []
             auto tree = to_data(box() | size(sizing::fill()) | background(0xFF0000_rgb));
             expect(static_cast<bool>(tree.finalize()));
 
-            const auto measure = [&context](std::string_view text, const font_spec &font,
-                                            std::optional<float> width_limit)
-            { return context.measure_text(text, font, width_limit); };
+            const auto measure
+                = [&context](std::string_view text, const font_spec &font,
+                             std::optional<float> width_limit, sleet::widget::text_wrap_mode wrap)
+            { return context.measure_text(text, font, width_limit, wrap); };
 
             auto layout = calculate_layout(tree, measure, { 64.F, 64.F });
             expect(static_cast<bool>(layout));
@@ -438,6 +440,156 @@ const boost::ut::suite render_tests = []
                         << "a child escaped an empty clip";
                     SDL_DestroySurface(pixels);
                 }
+            }
+
+            // Text alignment moves glyphs without moving the widget box.
+            context.set_viewport({ 64.F, 32.F });
+
+            auto aligned
+                = to_data(box()[label("I") | size(sizing::fill()) | text_size(24.F)
+                                | text_color(0xFFFFFF_rgb) | text_align(text_alignment::right)]
+                          | size(64.F, 32.F) | background(0x000000_rgb));
+            expect(static_cast<bool>(aligned.finalize()));
+
+            auto aligned_layout = calculate_layout(aligned, measure, { 64.F, 32.F });
+            expect(static_cast<bool>(aligned_layout));
+            if (aligned_layout)
+            {
+                expect(static_cast<bool>(context.render(aligned, *aligned_layout)));
+
+                auto *pixels = SDL_RenderReadPixels(renderer, nullptr);
+                expect(pixels != nullptr);
+                if (pixels != nullptr)
+                {
+                    auto min_x = 64;
+                    for (int y = 0; y < 32; y++)
+                        for (int x = 0; x < 64; x++)
+                        {
+                            std::uint8_t r = 0;
+                            std::uint8_t g = 0;
+                            std::uint8_t b = 0;
+                            std::uint8_t a = 0;
+                            if (!SDL_ReadSurfacePixel(pixels, x, y, &r, &g, &b, &a)) continue;
+                            if (r + g + b > 30) min_x = std::min(min_x, x);
+                        }
+
+                    expect(min_x > 32) << "right-aligned text did not reach the right half";
+                    SDL_DestroySurface(pixels);
+                }
+            }
+
+            // Justification expands spaces on soft-wrapped lines but leaves
+            // the final line of a paragraph at its natural width.
+            context.set_viewport({ 64.F, 40.F });
+
+            const auto justified_tree = [](text_alignment alignment)
+            {
+                return to_data(box()[label("aa aa aaaaaa") | size(sizing::fill()) | text_size(12.F)
+                                     | text_color(0xFFFFFF_rgb) | text_align(alignment)]
+                               | size(64.F, 40.F) | background(0x000000_rgb));
+            };
+
+            const auto first_line_extent = [&](const sleet::widget::node_data     &text_tree,
+                                               const sleet::widget::layout_result &text_layout)
+            {
+                expect(static_cast<bool>(context.render(text_tree, text_layout)));
+
+                auto  max_x  = 0;
+                auto *pixels = SDL_RenderReadPixels(renderer, nullptr);
+                expect(pixels != nullptr);
+                if (pixels != nullptr)
+                {
+                    for (int y = 0; y < 12; y++)
+                        for (int x = 0; x < 64; x++)
+                        {
+                            std::uint8_t r = 0;
+                            std::uint8_t g = 0;
+                            std::uint8_t b = 0;
+                            std::uint8_t a = 0;
+                            if (!SDL_ReadSurfacePixel(pixels, x, y, &r, &g, &b, &a)) continue;
+                            if (r + g + b > 30) max_x = std::max(max_x, x);
+                        }
+
+                    SDL_DestroySurface(pixels);
+                }
+                return max_x;
+            };
+
+            auto left_tree = justified_tree(text_alignment::left);
+            expect(static_cast<bool>(left_tree.finalize()));
+            auto left_layout = calculate_layout(left_tree, measure, { 64.F, 40.F });
+            expect(static_cast<bool>(left_layout));
+
+            auto justify_tree = justified_tree(text_alignment::justify);
+            expect(static_cast<bool>(justify_tree.finalize()));
+            auto justify_layout = calculate_layout(justify_tree, measure, { 64.F, 40.F });
+            expect(static_cast<bool>(justify_layout));
+
+            if (left_layout and justify_layout)
+            {
+                const auto left_max    = first_line_extent(left_tree, *left_layout);
+                const auto justify_max = first_line_extent(justify_tree, *justify_layout);
+
+                expect(justify_max > left_max + 8) << "justification did not expand the first line";
+            }
+
+            // The IME caret rectangle follows the field's text alignment.
+            context.set_viewport({ 120.F, 40.F });
+
+            auto caret_tree
+                = to_data(box()[text_input("abcd", "field", "Name") | id("field") | width(100.F)
+                                | height(24.F) | text_align(text_alignment::right)]
+                          | size(120.F, 40.F));
+            expect(static_cast<bool>(caret_tree.finalize()));
+
+            auto caret_layout = calculate_layout(caret_tree, measure, { 120.F, 40.F });
+            expect(static_cast<bool>(caret_layout));
+            if (caret_layout)
+            {
+                const auto *field  = caret_tree.find("field");
+                const auto *bounds = caret_layout->find("field");
+                expect(field != nullptr);
+                expect(bounds != nullptr);
+                if (field != nullptr and bounds != nullptr)
+                {
+                    const auto caret = context.text_input_caret_rect(
+                        *field, *bounds, text_selection { .caret = 4, .anchor = 4 });
+                    expect(caret.has_value());
+                    if (caret)
+                        expect(caret->position.x > bounds->position.x + (bounds->size.x / 2.F))
+                            << "the right-aligned caret did not move to the right";
+                }
+            }
+
+            // The real measurer honours wrap_anywhere for unbroken words.
+            context.set_viewport({ 64.F, 64.F });
+
+            const auto long_word_tree = [](text_wrap_mode wrap)
+            {
+                return to_data(box()[label("abcdefghijklmnopqrstuvwxyz") | id("text") | width(64.F)
+                                     | text_size(12.F) | text_wrap(wrap)]
+                               | size(64.F, 64.F));
+            };
+
+            auto wrapped_word_tree = long_word_tree(text_wrap_mode::wrap_anywhere);
+            expect(static_cast<bool>(wrapped_word_tree.finalize()));
+            auto wrapped_word_layout = calculate_layout(wrapped_word_tree, measure, { 64.F, 64.F });
+            expect(static_cast<bool>(wrapped_word_layout));
+
+            auto single_word_tree = long_word_tree(text_wrap_mode::no_wrap);
+            expect(static_cast<bool>(single_word_tree.finalize()));
+            auto single_word_layout = calculate_layout(single_word_tree, measure, { 64.F, 64.F });
+            expect(static_cast<bool>(single_word_layout));
+
+            if (wrapped_word_layout and single_word_layout)
+            {
+                const auto *wrapped = wrapped_word_layout->find("text");
+                const auto *single  = single_word_layout->find("text");
+                expect(wrapped != nullptr);
+                expect(single != nullptr);
+                if (wrapped != nullptr and single != nullptr)
+                    expect(wrapped->size.y > single->size.y)
+                        << "wrap_anywhere did not split the long word";
             }
 
             // Explicit radii round the corners of a normal (non-root) node.

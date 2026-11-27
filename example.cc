@@ -155,7 +155,7 @@ namespace
                                          | text_role(font_role::heading) | text_color(0xF3F5F8_rgb),
                                      muted("Every built-in widget in one interactive window.")]
                                 | gap(2.F),
-                            spacer(), badge("v1.3.10")]
+                            spacer(), badge("v1.4.0")]
                     | gap(12.F) | width(sizing::fill()) | valign(align::center);
 
 
@@ -246,7 +246,14 @@ namespace
                      row()[muted("Caption"), label("Bold") | text_weight(font_weight::bold),
                            label("Underlined") | text_decoration(text_attribute::flag::underline)]
                          | gap(12.F),
-                     label("Monospace") | text_role(font_role::code)]
+                     label("Monospace") | text_role(font_role::code),
+                     row()[label("Left") | hexpand() | text_align(text_alignment::left),
+                           label("Center") | hexpand() | text_align(text_alignment::center),
+                           label("Right") | hexpand() | text_align(text_alignment::right)]
+                         | gap(8.F) | width(sizing::fill()),
+                     label("Justified text stretches spaces on every line except the last, so "
+                           "both edges line up cleanly even as the window resizes.")
+                         | text_color(0xB8C0CC_rgb) | text_align(text_alignment::justify)]
             | gap(8.F));
 
 

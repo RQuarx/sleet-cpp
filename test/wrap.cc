@@ -14,10 +14,10 @@ namespace
     { return static_cast<float>(line.size()) * 10.F; }
 
 
-    auto lines_of(std::string_view text, std::optional<float> width)
+    auto lines_of(std::string_view text, std::optional<float> width, bool break_anywhere = false)
         -> std::vector<std::string_view>
     {
-        auto wrapped = sleet::txt::wrap(text, width, measure);
+        auto wrapped = sleet::txt::wrap(text, width, measure, break_anywhere);
         if (!wrapped) throw std::runtime_error { wrapped.error().what() };
 
         std::vector<std::string_view> result;
@@ -89,6 +89,63 @@ const boost::ut::suite wrap_tests = []
     };
 
     "empty text yields no lines"_test = [] { expect(lines_of("", 10.F).empty()); };
+
+    "wrap anywhere splits a word that does not fit"_test = []
+    {
+        const auto lines = lines_of("abcdefghij", 30.F, true);
+        expect(eq(lines.size(), 4_u));
+        expect(eq(lines[0], "abc"sv));
+        expect(eq(lines[1], "def"sv));
+        expect(eq(lines[2], "ghi"sv));
+        expect(eq(lines[3], "j"sv));
+    };
+
+    "wrap anywhere keeps grapheme clusters together"_test = []
+    {
+        // "e" followed by a combining acute accent is one grapheme cluster.
+        const auto lines = lines_of("ae\xCC\x81"
+                                    "b"sv,
+                                    20.F, true);
+        expect(eq(lines.size(), 3_u));
+        expect(eq(lines[0], "a"sv));
+        expect(eq(lines[1], "e\xCC\x81"sv));
+        expect(eq(lines[2], "b"sv));
+    };
+
+    "wrap anywhere does not emit blank lines for skipped spaces"_test = []
+    {
+        const auto lines = lines_of("abc def", 10.F, true);
+        expect(eq(lines.size(), 6_u));
+        expect(eq(lines[0], "a"sv));
+        expect(eq(lines[1], "b"sv));
+        expect(eq(lines[2], "c"sv));
+        expect(eq(lines[3], "d"sv));
+        expect(eq(lines[4], "e"sv));
+        expect(eq(lines[5], "f"sv));
+    };
+
+    "wrap anywhere still prefers a break opportunity"_test = []
+    {
+        const auto lines = lines_of("aa bbbbbbbbbb", 30.F, true);
+        expect(eq(lines.size(), 5_u));
+        expect(eq(lines[0], "aa"sv));
+        expect(eq(lines[1], "bbb"sv));
+        expect(eq(lines[2], "bbb"sv));
+        expect(eq(lines[3], "bbb"sv));
+        expect(eq(lines[4], "b"sv));
+    };
+
+    "hard breaks mark paragraph ends and the end of the text"_test = []
+    {
+        auto wrapped = sleet::txt::wrap("aa bb\ncc"sv, 20.F, measure);
+        expect(static_cast<bool>(wrapped));
+        if (!wrapped) return;
+
+        expect(eq(wrapped->size(), 3_u));
+        expect(!(*wrapped)[0].hard_break);
+        expect((*wrapped)[1].hard_break);
+        expect((*wrapped)[2].hard_break);
+    };
 
     "invalid utf-8 is reported"_test = []
     {

@@ -23,8 +23,10 @@ the window, renderer, and event loop.
 - Stable generated widget ids derived from the call site, with explicit `id` or
   `key` overrides.
 - Text is measured at its intrinsic size and wrapped using Unicode line-break
-  rules. Editing is grapheme-aware and supports word movement, selection,
-  undo/redo, and IME composition.
+  rules, with `no_wrap` and `wrap_anywhere` modes plus left, center, right, and
+  justified alignment. Editing is grapheme-aware and supports word movement,
+  selection, undo/redo, and IME composition with native candidate-window
+  placement.
 - Rendering uses SDL3 in physical pixels for high-DPI windows, with
   antialiased rounded primitives, cached fonts and text textures, clipping, and
   theme colors for hover, press, focus, and disabled states.

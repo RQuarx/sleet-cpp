@@ -39,9 +39,17 @@ width is constrained — by a fixed-width box or column, or because the node
 itself is `fill` or `grow` — the text is re-measured and wrapped at that width.
 A fit-width item on a row's main axis keeps its intrinsic width. `txt::wrap`
 treats any supplied width as a limit and clamps it to zero; passing
-`std::nullopt` is the only way to get unwrapped text. Production code passes
+`std::nullopt` is the only way to get unwrapped text.
+
+`text_wrap(text_wrap_mode::no_wrap)` suppresses wrapping even when a limit is
+available, while `wrap_anywhere` splits a word at grapheme boundaries when the
+word itself cannot fit. `text_align` selects `left`, `center`, `right`, or
+`justify` without moving child widgets; when it is unset, the node's
+`halign` is used. Justified lines expand spaces, and the last line of each
+paragraph stays at its natural width. Production code passes
 `render_context::measure_text` as the `text_measurer`, and tests can pass a
-deterministic callback instead.
+deterministic callback instead. The three-argument measurer overload remains
+available for compatibility; it treats `wrap_anywhere` as ordinary wrapping.
 
 ## Boxes and stacks
 

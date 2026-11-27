@@ -218,6 +218,23 @@ namespace sleet::widget
     }
 
 
+    /// Selects how a text node wraps when its content box is constrained.
+    [[nodiscard]]
+    inline auto text_wrap(text_wrap_mode mode)
+    {
+        return _impl::make_modifier([mode](node_data &data) { data.wrap = mode; });
+    }
+
+
+    /// Overrides horizontal text alignment without changing how child widgets
+    /// are placed. Use \c halign for layout alignment.
+    [[nodiscard]]
+    inline auto text_align(text_alignment value)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.text_align = value; });
+    }
+
+
     [[nodiscard]]
     inline auto background(color value)
     {

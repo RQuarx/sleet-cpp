@@ -1,12 +1,15 @@
 #include <cmath>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_events.h>
+#include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_keycode.h>
 #include <SDL3/SDL_mouse.h>
+#include <SDL3/SDL_video.h>
 #include <boost/ut.hpp>
 
 #include "sleet/sleet.hh"
@@ -83,6 +86,28 @@ namespace
         SDL_Event native {};
         native.type = SDL_EVENT_QUIT;
         SDL_PushEvent(&native);
+    }
+
+
+    auto window_by_title(std::string_view title) -> SDL_Window *
+    {
+        auto  count   = 0;
+        auto *windows = SDL_GetWindows(&count);
+        if (windows == nullptr) return nullptr;
+
+        SDL_Window *found = nullptr;
+        for (auto i = 0; i < count; i++)
+        {
+            const auto *window_title = SDL_GetWindowTitle(windows[i]);
+            if (window_title != nullptr and title == window_title)
+            {
+                found = windows[i];
+                break;
+            }
+        }
+
+        SDL_free(windows);
+        return found;
     }
 }
 
@@ -177,6 +202,69 @@ const boost::ut::suite application_tests = []
         expect(eq(observed.name, std::string { "hi" }));
         expect(eq(observed.submits, 1));
         expect(eq(observed.activates, 1));
+    };
+
+    "text input is enabled only while a field has focus"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        { std::string name; };
+
+        struct message
+        {
+        };
+
+        using app = sleet::application<state, message>;
+
+        auto active_when_focused   = false;
+        auto inactive_when_blurred = false;
+        auto frame                 = 0;
+
+        auto result
+            = app { "sleet-text-input-state-test", 320, 240, std::move(theme) }
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message {} }; })
+                  .on_update([](state &, const message &) -> kei::result<> { return {}; })
+                  .on_view(
+                      [](const state &current)
+                      {
+                          return column()[text_input(current.name, "name", "Name"),
+                                          button("Other", "other")];
+                      })
+                  .on_subscription(
+                      [&]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1: push_key(SDLK_TAB); break;
+                          // Focus changes are presented on the next
+                          // frame, so the state is observable here.
+                          case 3:
+                              if (auto *window = window_by_title("sleet-text-input-state-test");
+                                  window != nullptr)
+                                  active_when_focused = SDL_TextInputActive(window);
+                              push_key(SDLK_TAB);
+                              break;
+                          case 5:
+                              if (auto *window = window_by_title("sleet-text-input-state-test");
+                                  window != nullptr)
+                                  inactive_when_blurred = !SDL_TextInputActive(window);
+                              break;
+                          case 6:  push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(active_when_focused) << "text input was not enabled for the focused field";
+        expect(inactive_when_blurred) << "text input stayed enabled without a focused field";
     };
 
     "clicking a checkbox indicator toggles its action"_test = []
