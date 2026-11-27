@@ -805,6 +805,9 @@ namespace sleet
             float       duration = 3.F;
         };
 
+        static constexpr auto toast_fade_in  = 0.16F;
+        static constexpr auto toast_fade_out = 0.30F;
+
         std::deque<toast_entry> m_toasts;
 
         int           m_width  = 800;
@@ -1302,6 +1305,20 @@ namespace sleet
                                          ? Sint32 { 0 }
                                          : static_cast<Sint32>(m_tooltip_delay_ms - elapsed);
                 timeout              = timeout < 0 ? remaining : std::min(timeout, remaining);
+            }
+
+            // Toasts animate on their own timeline. Wake for fade frames, then
+            // sleep until the fade-out starts or the toast expires.
+            for (const auto &toast : m_toasts)
+            {
+                const auto remaining = toast.duration - toast.age;
+                auto       next      = Sint32 { 16 };
+
+                if (remaining > toast_fade_out and toast.age >= toast_fade_in)
+                    next = static_cast<Sint32>(
+                        std::ceil((remaining - toast_fade_out) * 1000.F));
+
+                timeout = timeout < 0 ? next : std::min(timeout, next);
             }
 
             return timeout;
@@ -3565,7 +3582,7 @@ namespace sleet
         /// Advances toast lifetimes and reports whether any remain visible.
         auto advance_toasts(float delta_seconds) -> bool
         {
-            auto active = false;
+            auto repaint = false;
 
             for (auto it = m_toasts.begin(); it != m_toasts.end();)
             {
@@ -3574,23 +3591,23 @@ namespace sleet
                 if (it->age >= it->duration)
                 {
                     it = m_toasts.erase(it);
+                    repaint = true;
                     continue;
                 }
 
+                const auto remaining = it->duration - it->age;
+                if (it->age < toast_fade_in or remaining < toast_fade_out) repaint = true;
+
                 ++it;
-                active = true;
             }
 
-            return active;
+            return repaint;
         }
 
 
         [[nodiscard]]
         auto build_toasts() const -> std::vector<toast_message>
         {
-            constexpr auto fade_in  = 0.16F;
-            constexpr auto fade_out = 0.30F;
-
             auto result = std::vector<toast_message> {};
             result.reserve(m_toasts.size());
 
@@ -3598,14 +3615,15 @@ namespace sleet
             {
                 auto opacity = 1.F;
 
-                if (toast.age < fade_in) opacity = toast.age / fade_in;
+                if (toast.age < toast_fade_in) opacity = toast.age / toast_fade_in;
 
                 const auto remaining = toast.duration - toast.age;
-                if (remaining < fade_out) opacity = std::min(opacity, remaining / fade_out);
+                if (remaining < toast_fade_out)
+                    opacity = std::min(opacity, remaining / toast_fade_out);
 
                 auto offset = 0.F;
-                if (!m_reduced_motion and toast.age < fade_in)
-                    offset = (1.F - (toast.age / fade_in)) * 10.F;
+                if (!m_reduced_motion and toast.age < toast_fade_in)
+                    offset = (1.F - (toast.age / toast_fade_in)) * 10.F;
 
                 result.push_back({ toast.text, std::clamp(opacity, 0.F, 1.F), offset });
             }
@@ -3830,7 +3848,7 @@ namespace sleet
                 last_tick          = now;
                 const auto delta   = std::clamp(elapsed, 0.F, 0.1F);
 
-                if (advance_toasts(delta)) current.dirty = true;
+                if (advance_toasts(elapsed)) current.dirty = true;
 
                 if (current.view_dirty)
                 {
