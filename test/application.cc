@@ -9,6 +9,7 @@
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_keycode.h>
 #include <SDL3/SDL_mouse.h>
+#include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_video.h>
 #include <boost/ut.hpp>
 
@@ -202,6 +203,65 @@ const boost::ut::suite application_tests = []
         expect(eq(observed.name, std::string { "hi" }));
         expect(eq(observed.submits, 1));
         expect(eq(observed.activates, 1));
+    };
+
+    "a hovered widget without a tooltip does not wake the idle loop"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+        };
+
+        struct message
+        {
+        };
+
+        using app = sleet::application<state, message>;
+
+        auto polls       = 0;
+        auto motion_sent = false;
+        auto motion_tick = Uint64 { 0 };
+
+        auto instance = app { "sleet-idle-tooltip-test", 320, 240, std::move(theme) };
+
+        // A zero delay makes the regression deterministic: once the pointer
+        // rests on a widget without tooltip text, the old timeout calculation
+        // returned zero forever and stopped polling SDL events entirely.
+        instance.set_tooltip_delay(0);
+
+        auto result = instance
+                          .on_boot([]() -> kei::result<std::pair<state, message>>
+                                   { return std::pair { state {}, message {} }; })
+                          .on_update([](state &, const message &) -> kei::result<> { return {}; })
+                          .on_view([](const state &)
+                                   { return column()[box() | width(200.F) | height(40.F)]; })
+                          .on_subscription(
+                              [&]() -> std::optional<message>
+                              {
+                                  polls++;
+
+                                  if (!motion_sent)
+                                  {
+                                      push_motion(10.F, 20.F);
+                                      motion_sent = true;
+                                      motion_tick = SDL_GetTicks();
+                                  }
+                                  else if (SDL_GetTicks() - motion_tick >= 400)
+                                      instance.request_quit();
+
+                                  return std::nullopt;
+                              })
+                          .run();
+
+        expect(eq(result, 0));
+
+        // At the subscription cadence this is about 25 polls. A busy loop
+        // reaches thousands in the same window.
+        expect(polls < 100) << "idle loop polled " << polls << " times";
     };
 
     "text input is enabled only while a field has focus"_test = []
@@ -506,10 +566,13 @@ const boost::ut::suite application_tests = []
 
         using app = sleet::application<state, message>;
 
-        auto observed = state {};
-        auto frame    = 0;
+        auto observed        = state {};
+        auto frame           = 0;
+        auto clipboard_ready = true;
 
-        auto result = app { "sleet-paste-test", 320, 240, std::move(theme) }
+        auto instance = app { "sleet-paste-test", 320, 240, std::move(theme) };
+
+        auto result = instance
                           .on_boot([]() -> kei::result<std::pair<state, message>>
                                    { return std::pair { state {}, message {} }; })
                           .on_update(
@@ -533,21 +596,38 @@ const boost::ut::suite application_tests = []
                                   return std::nullopt;
                               })
                           .on_subscription(
-                              [&frame]() -> std::optional<message>
+                              [&]() -> std::optional<message>
                               {
                                   switch (++frame)
                                   {
-                                  case 1:
-                                      // The headless clipboard may be
-                                      // unavailable; an empty clipboard is the
-                                      // only thing this test needs.
-                                      (void)SDL_SetClipboardText("");
-                                      push_key(SDLK_TAB);
+                                  case 1: push_key(SDLK_TAB); break;
+
+                                  // Clear the clipboard only after the window has
+                                  // focus. Clipboard managers may ignore empty
+                                  // selections, so verify the clear took before
+                                  // relying on it.
+                                  case 2: (void)SDL_SetClipboardText(""); break;
+                                  case 3:
+                                      if (auto *text = SDL_GetClipboardText(); text != nullptr)
+                                      {
+                                          clipboard_ready = *text == '\0';
+                                          SDL_free(text);
+                                      }
+                                      else
+                                          clipboard_ready = false;
+
+                                      if (clipboard_ready)
+                                          push_text("abc");
+                                      else
+                                          instance.request_quit();
                                       break;
-                                  case 2:  push_text("abc"); break;
-                                  case 3:  push_key(SDLK_V, SDL_KMOD_CTRL); break;
-                                  case 4:  push_key(SDLK_Z, SDL_KMOD_CTRL); break;
-                                  case 5:  push_quit(); break;
+                                  case 4:
+                                      if (clipboard_ready) push_key(SDLK_V, SDL_KMOD_CTRL);
+                                      break;
+                                  case 5:
+                                      if (clipboard_ready) push_key(SDLK_Z, SDL_KMOD_CTRL);
+                                      break;
+                                  case 6:  instance.request_quit(); break;
                                   default: break;
                                   }
 
@@ -556,6 +636,7 @@ const boost::ut::suite application_tests = []
                           .run();
 
         expect(eq(result, 0));
+        if (!clipboard_ready) return;
 
         // If the no-op paste had recorded an undo snapshot, Ctrl+Z would have
         // restored "abc" instead of the text from before typing.
@@ -1046,12 +1127,11 @@ const boost::ut::suite frame_reuse_tests = []
         if (theme.fonts.face(font_role::body).path.empty()) return;
 
         struct state
-        {};
+        {
+        };
 
         struct message
-        {
-            int kind = 0;
-        };
+        { int kind = 0; };
 
         using app = sleet::application<state, message>;
 
@@ -1062,37 +1142,36 @@ const boost::ut::suite frame_reuse_tests = []
         auto app_object = app { "sleet-frame-reuse-test", 320, 240, std::move(theme) };
         instance        = &app_object;
 
-        auto result
-            = app_object
-                  .on_boot([]() -> kei::result<std::pair<state, message>>
-                           { return std::pair { state {}, message {} }; })
-                  .on_update(
-                      [&instance](state &, const message &value, auto &&) -> kei::result<>
-                      {
-                          if (value.kind == 1) instance->notify("toast", 5.F);
-                          return {};
-                      })
-                  .on_view(
-                      [&views](const state &)
-                      {
-                          views++;
-                          return column()[button("Hover", "hover") | width(200.F)
-                                          | height(40.F) | transition(0.2F)]
-                               | width(300.F);
-                      })
-                  .on_subscription(
-                      [&frame]() -> std::optional<message>
-                      {
-                          switch (++frame)
-                          {
-                          case 1: push_motion(10.F, 10.F); return message { 1 };
-                          case 8: push_quit(); break;
-                          default: break;
-                          }
+        auto result = app_object
+                          .on_boot([]() -> kei::result<std::pair<state, message>>
+                                   { return std::pair { state {}, message {} }; })
+                          .on_update(
+                              [&instance](state &, const message &value, auto &&) -> kei::result<>
+                              {
+                                  if (value.kind == 1) instance->notify("toast", 5.F);
+                                  return {};
+                              })
+                          .on_view(
+                              [&views](const state &)
+                              {
+                                  views++;
+                                  return column()[button("Hover", "hover") | width(200.F)
+                                                  | height(40.F) | transition(0.2F)]
+                                       | width(300.F);
+                              })
+                          .on_subscription(
+                              [&frame]() -> std::optional<message>
+                              {
+                                  switch (++frame)
+                                  {
+                                  case 1:  push_motion(10.F, 10.F); return message { 1 };
+                                  case 8:  push_quit(); break;
+                                  default: break;
+                                  }
 
-                          return std::nullopt;
-                      })
-                  .run();
+                                  return std::nullopt;
+                              })
+                          .run();
 
         expect(eq(result, 0));
 
@@ -1115,10 +1194,8 @@ const boost::ut::suite modal_paint_order_tests = []
         // The in-flow modal is declared last, and the higher-z modal first.
         // Paint order still puts the floating modals above the in-flow one,
         // and z-index orders the two floating modals.
-        auto tree = to_data(column()[box() | id("high") | floating() | z_index(5)
-                                         | modal("high"),
-                                     box() | id("low") | floating() | z_index(1)
-                                         | modal("low"),
+        auto tree = to_data(column()[box() | id("high") | floating() | z_index(5) | modal("high"),
+                                     box() | id("low") | floating() | z_index(1) | modal("low"),
                                      box() | id("flow") | modal("flow")]);
         expect(static_cast<bool>(tree.finalize()));
 

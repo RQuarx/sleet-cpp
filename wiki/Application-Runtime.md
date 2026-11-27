@@ -52,12 +52,16 @@ coordinates are logical window points; the renderer converts them to physical
 pixels from the current output size, so high-DPI windows stay sharp without
 changing application code. Resize, pixel-size, display-change, and display-scale
 events update the viewport and scale, then mark the frame dirty.
+`request_quit()` stops the loop after the current iteration and works from
+subscriptions and update callbacks, not just window-close events.
 
 Tooltips are runtime state. The deepest hovered node with `tooltip()` on itself
 or an ancestor starts a 550 ms timer; pointer motion, clicks, scrolling, and
-focus changes hide the bubble. Toasts created with `notify(text, seconds)` live
-in the runtime too, fading and sliding in, stacking bottom-right, and expiring
-without any view state.
+focus changes hide the bubble. `set_tooltip_delay(ms)` changes that delay. Only
+nodes that can actually show a tooltip wake the idle loop, so resting the pointer
+on ordinary widgets leaves the window asleep. Toasts created with
+`notify(text, seconds)` live in the runtime too, fading and sliding in, stacking
+bottom-right, and expiring without any view state.
 
 Focus, text selection, IME preedit, undo/redo stacks, open combos, scroll
 offsets, hover, press, and drag state are kept per widget id across view

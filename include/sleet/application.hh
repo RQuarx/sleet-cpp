@@ -316,6 +316,20 @@ namespace sleet
         }
 
 
+        /// Returns the nearest node, starting at \p node, that has tooltip
+        /// text. Returning null means hovering this subtree should not schedule
+        /// a tooltip wakeup.
+        [[nodiscard]]
+        inline auto tooltip_owner(const widget::node_data *node) noexcept
+            -> const widget::node_data *
+        {
+            for (auto *cursor = node; cursor != nullptr; cursor = cursor->parent)
+                if (!cursor->tooltip_text.empty()) return cursor;
+
+            return nullptr;
+        }
+
+
         /// Returns the topmost visible modal surface, in paint order. A modal
         /// blocks pointer input to everything outside its subtree.
         [[nodiscard]]
@@ -609,6 +623,21 @@ namespace sleet
         void set_reduced_motion(bool value = true) noexcept { m_reduced_motion = value; }
 
 
+        /// Sets how long the pointer must rest before a tooltip appears.
+        /// A delay of zero shows tooltips immediately.
+        ///
+        /// Call from an update callback or the event-loop thread; the
+        /// application is not thread-safe.
+        void set_tooltip_delay(std::uint32_t milliseconds) noexcept
+        { m_tooltip_delay_ms = milliseconds; }
+
+
+        /// Asks the event loop to stop after the current iteration. This is
+        /// equivalent to closing the window, but it also works from a
+        /// subscription or update callback.
+        void request_quit() noexcept { m_quit_requested = true; }
+
+
         /// Shows a transient notification in the bottom-right corner. Toasts
         /// fade in, stack upward, and disappear after \p seconds.
         ///
@@ -676,6 +705,12 @@ namespace sleet
 
         /// Disables easing globally, for accessibility settings.
         bool m_reduced_motion = false;
+
+        /// How long the pointer must rest before a tooltip appears.
+        std::uint32_t m_tooltip_delay_ms = 550;
+
+        /// Set by request_quit so callbacks can stop the loop.
+        bool m_quit_requested = false;
 
         /// Whether SDL text input is currently enabled for the window.
         bool m_text_input_active = false;
@@ -1079,10 +1114,6 @@ namespace sleet
         }
 
 
-        /// How long the pointer must rest before a tooltip appears.
-        static constexpr auto tooltip_delay_ms = std::uint64_t { 550 };
-
-
         /// Restarts the rest timer after pointer movement. Moving within the
         /// same widget still counts as movement, so a tooltip only appears
         /// once the pointer settles.
@@ -1094,7 +1125,7 @@ namespace sleet
         }
 
 
-        static void update_tooltip(session &current)
+        void update_tooltip(session &current) const
         {
             if (!current.tree or !current.layout) return;
 
@@ -1122,14 +1153,7 @@ namespace sleet
                 return;
             }
 
-            const widget::node_data *owner = nullptr;
-            for (const auto *cursor = node; cursor != nullptr; cursor = cursor->parent)
-                if (!cursor->tooltip_text.empty())
-                {
-                    owner = cursor;
-                    break;
-                }
-
+            const auto *owner  = _impl::tooltip_owner(node);
             const auto *bounds = owner != nullptr ? current.layout->find(owner->id) : nullptr;
             if (bounds == nullptr)
             {
@@ -1150,7 +1174,7 @@ namespace sleet
                 return;
             }
 
-            if (SDL_GetTicks() - current.tooltip_started < tooltip_delay_ms) return;
+            if (SDL_GetTicks() - current.tooltip_started < m_tooltip_delay_ms) return;
 
             current.tooltip_text    = owner->tooltip_text;
             current.tooltip_anchor  = *bounds;
@@ -1162,19 +1186,28 @@ namespace sleet
         /// Returns the number of milliseconds the idle loop may sleep before a
         /// timer needs attention, or -1 to block until an SDL event arrives.
         [[nodiscard]]
-        auto idle_timeout(const session &current) const -> Sint32
+        auto idle_timeout(session &current) const -> Sint32
         {
             auto timeout = Sint32 { -1 };
 
             // Subscriptions are polled, so they keep the historical cadence.
             if (m_subscription) timeout = 16;
 
-            if (current.pointer_target and !current.tooltip_visible)
+            // Only schedule a wakeup when there is actually a tooltip to show.
+            // Returning zero for a hovered node without tooltip text made the
+            // idle loop spin at full speed until the pointer moved away.
+            const auto *node
+                = current.pointer_target ? find_node(current, *current.pointer_target) : nullptr;
+            const auto *owner = _impl::tooltip_owner(node);
+            const auto *bounds
+                = owner != nullptr and current.layout ? current.layout->find(owner->id) : nullptr;
+
+            if (bounds != nullptr and !current.tooltip_visible)
             {
                 const auto elapsed   = SDL_GetTicks() - current.tooltip_started;
-                const auto remaining = elapsed >= tooltip_delay_ms
+                const auto remaining = elapsed >= m_tooltip_delay_ms
                                          ? Sint32 { 0 }
-                                         : static_cast<Sint32>(tooltip_delay_ms - elapsed);
+                                         : static_cast<Sint32>(m_tooltip_delay_ms - elapsed);
                 timeout              = timeout < 0 ? remaining : std::min(timeout, remaining);
             }
 
@@ -3067,7 +3100,7 @@ namespace sleet
             while (true)
             {
                 if (!pump_messages(current)) return 1;
-                if (current.quit_requested) break;
+                if (current.quit_requested or m_quit_requested) break;
 
                 pump_subscription(current);
 
