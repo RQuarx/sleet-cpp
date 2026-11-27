@@ -170,6 +170,18 @@ const boost::ut::suite control_tests = []
         const auto invalid = std::string { "a\xFF" };
         expect(sanitize_single_line(invalid).empty());
     };
+
+    "sanitize_multiline normalizes line endings and keeps newlines"_test = []
+    {
+        expect(eq(sanitize_multiline("a\r\nb\tc"), std::string { "a\nb c" }));
+        expect(eq(sanitize_multiline("a\nb"), std::string { "a\nb" }));
+        expect(eq(sanitize_multiline("a\rb"), std::string { "a\nb" }));
+        expect(eq(sanitize_multiline(std::string { "a\0b", 3 }), std::string { "a b" }));
+        expect(eq(sanitize_multiline("plain"), std::string { "plain" }));
+
+        const auto invalid = std::string { "a\xFF" };
+        expect(sanitize_multiline(invalid).empty());
+    };
 };
 
 

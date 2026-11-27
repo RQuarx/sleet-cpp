@@ -20,6 +20,7 @@ namespace
     {
         int         count = 0;
         std::string name;
+        std::string notes;
         std::string color         = "Blue";
         std::string density       = "Comfortable";
         bool        show_details  = true;
@@ -44,6 +45,8 @@ namespace
             clear,
             boost,
             name_changed,
+            notes_changed,
+            notes_submit,
             color_changed,
             density_changed,
             toggle_details,
@@ -155,7 +158,7 @@ namespace
                                          | text_role(font_role::heading) | text_color(0xF3F5F8_rgb),
                                      muted("Every built-in widget in one interactive window.")]
                                 | gap(2.F),
-                            spacer(), badge("v1.4.1")]
+                            spacer(), badge("v1.5.0")]
                     | gap(12.F) | width(sizing::fill()) | valign(align::center);
 
 
@@ -193,6 +196,13 @@ namespace
                             progress_bar(current.volume, 10.F),
                             muted("Drag the slider or focus it and use the arrow keys.")]
                    | gap(10.F));
+
+
+        auto notes_card = card(
+            column()[section_title("Text area"),
+                     text_area(current.notes, "notes", "Write a few lines...") | height(96.F),
+                     muted("Enter adds a line. Ctrl/Cmd+Enter submits.")]
+            | gap(8.F));
 
 
         auto scroll_rows = column() | gap(4.F);
@@ -287,7 +297,8 @@ namespace
                               std::move(scroll_card), std::move(styles_card)]
                    | width(sizing::grow()) | flex(1.F) | gap(14.F);
         auto right = column()[std::move(buttons_card), std::move(slider_card),
-                              std::move(overlay_card), std::move(status_card)]
+                              std::move(notes_card), std::move(overlay_card),
+                              std::move(status_card)]
                    | width(sizing::grow()) | flex(1.F) | gap(14.F);
 
 
@@ -349,6 +360,10 @@ auto main() -> int
                     case message::kind::clear:           current.name.clear(); break;
                     case message::kind::boost:           current.count += 10; break;
                     case message::kind::name_changed:    current.name = value.text; break;
+                    case message::kind::notes_changed:   current.notes = value.text; break;
+                    case message::kind::notes_submit:
+                        instance.notify("Notes submitted", 2.5F);
+                        break;
                     case message::kind::color_changed:   current.color = value.text; break;
                     case message::kind::density_changed: current.density = value.text; break;
                     case message::kind::toggle_details:
@@ -406,6 +421,13 @@ auto main() -> int
                     case event::kind::text_edit:
                         if (input.action == "name")
                             return message { message::kind::name_changed, input.text };
+                        if (input.action == "notes")
+                            return message { message::kind::notes_changed, input.text };
+                        return std::nullopt;
+
+                    case event::kind::submit:
+                        if (input.action == "notes")
+                            return message { message::kind::notes_submit };
                         return std::nullopt;
 
                     case event::kind::selection_changed:

@@ -147,6 +147,20 @@ const boost::ut::suite wrap_tests = []
         expect((*wrapped)[2].hard_break);
     };
 
+    "wrapped lines carry byte offsets into the source"_test = []
+    {
+        auto wrapped = sleet::txt::wrap("aa bb\ncc"sv, 20.F, measure);
+        expect(static_cast<bool>(wrapped));
+        if (!wrapped) return;
+
+        // The space at the soft break is skipped, so the second line starts
+        // at "bb". The hard break skips the newline before "cc".
+        expect(eq(wrapped->size(), 3_u));
+        expect(eq((*wrapped)[0].begin, 0_u));
+        expect(eq((*wrapped)[1].begin, 3_u));
+        expect(eq((*wrapped)[2].begin, 6_u));
+    };
+
     "invalid utf-8 is reported"_test = []
     {
         const auto result = sleet::txt::wrap("a\xE6\x97"sv, 10.F, measure);

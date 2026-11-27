@@ -89,6 +89,41 @@ const boost::ut::suite render_tests = []
 
             expect(static_cast<bool>(context.render(tree, *layout)));
 
+            // Layout exposes byte offsets so the runtime can map carets and
+            // pointer positions onto the same lines the renderer draws.
+            auto measured_lines
+                = context.measure_lines("ab\ncd", font_spec {}, 100.F, text_wrap_mode::wrap);
+            expect(static_cast<bool>(measured_lines));
+            if (measured_lines)
+            {
+                expect(eq(measured_lines->size(), 2_u));
+                expect(eq((*measured_lines)[0].begin, 0_u));
+                expect(eq((*measured_lines)[0].end, 2_u));
+                expect(eq((*measured_lines)[1].begin, 3_u));
+                expect(eq((*measured_lines)[1].end, 5_u));
+            }
+
+            auto empty_lines
+                = context.measure_lines({}, font_spec {}, 100.F, text_wrap_mode::wrap);
+            expect(static_cast<bool>(empty_lines));
+            if (empty_lines)
+            {
+                expect(eq(empty_lines->size(), 1_u));
+                expect(eq((*empty_lines)[0].begin, 0_u));
+                expect(eq((*empty_lines)[0].end, 0_u));
+            }
+
+            // A trailing newline leaves an empty final line for the caret.
+            auto trailing_lines
+                = context.measure_lines("ab\n", font_spec {}, 100.F, text_wrap_mode::wrap);
+            expect(static_cast<bool>(trailing_lines));
+            if (trailing_lines)
+            {
+                expect(eq(trailing_lines->size(), 2_u));
+                expect(eq((*trailing_lines)[1].begin, 3_u));
+                expect(eq((*trailing_lines)[1].end, 3_u));
+            }
+
             auto *background_pixels = SDL_RenderReadPixels(renderer, nullptr);
             expect(background_pixels != nullptr);
             if (background_pixels != nullptr)
@@ -169,6 +204,96 @@ const boost::ut::suite render_tests = []
 
                 context.set_focused(std::nullopt);
                 context.set_text_selection(std::nullopt, {});
+            }
+
+            // A multiline field draws wrapped lines and places its caret on
+            // the line that owns the offset.
+            auto area_tree = to_data(column()[text_area("ab\ncd", "notes") | id("notes")
+                                              | width(200.F) | height(80.F)]
+                                     | size(sizing::fill()));
+            expect(static_cast<bool>(area_tree.finalize()));
+
+            auto area_layout = calculate_layout(area_tree, measure, { 320.F, 240.F });
+            expect(static_cast<bool>(area_layout));
+            if (area_layout)
+            {
+                const auto area_id = widget_id { "notes" };
+                const auto *area   = area_tree.find(area_id);
+                const auto *bounds = area_layout->find(area_id);
+                expect(area != nullptr);
+                expect(bounds != nullptr);
+
+                if (area != nullptr and bounds != nullptr)
+                {
+                    const text_selection selection { .caret = 3, .anchor = 1 };
+                    context.set_focused(area_id);
+                    context.set_text_selection(area_id, selection, 0.F);
+
+                    expect(static_cast<bool>(context.render(area_tree, *area_layout)));
+
+                    auto caret = context.text_input_caret_rect(*area, *bounds, selection);
+                    expect(caret.has_value());
+                    if (caret)
+                    {
+                        auto line_height = context.line_height(area->font);
+                        expect(static_cast<bool>(line_height));
+                        if (line_height)
+                        {
+                            const auto content = bounds->inset(area->padding);
+                            expect(std::abs(caret->position.x - content.position.x) < 1.F);
+                            expect(std::abs(caret->position.y
+                                            - (content.position.y + *line_height + 2.F))
+                                   < 1.F);
+                        }
+                    }
+
+                    context.set_focused(std::nullopt);
+                    context.set_text_selection(std::nullopt, {});
+                }
+            }
+
+            // The caret after a trailing newline sits on the new empty line,
+            // not at the end of the previous line.
+            auto trailing_tree = to_data(column()[text_area("ab\n", "trailing") | id("trailing")
+                                                  | width(200.F) | height(80.F)]
+                                         | size(sizing::fill()));
+            expect(static_cast<bool>(trailing_tree.finalize()));
+
+            auto trailing_layout = calculate_layout(trailing_tree, measure, { 320.F, 240.F });
+            expect(static_cast<bool>(trailing_layout));
+            if (trailing_layout)
+            {
+                const auto trailing_id = widget_id { "trailing" };
+                const auto *trailing   = trailing_tree.find(trailing_id);
+                const auto *bounds     = trailing_layout->find(trailing_id);
+                expect(trailing != nullptr);
+                expect(bounds != nullptr);
+
+                if (trailing != nullptr and bounds != nullptr)
+                {
+                    const text_selection selection { .caret = 3, .anchor = 3 };
+                    context.set_focused(trailing_id);
+                    context.set_text_selection(trailing_id, selection, 0.F);
+
+                    auto caret = context.text_input_caret_rect(*trailing, *bounds, selection);
+                    expect(caret.has_value());
+                    if (caret)
+                    {
+                        auto line_height = context.line_height(trailing->font);
+                        expect(static_cast<bool>(line_height));
+                        if (line_height)
+                        {
+                            const auto content = bounds->inset(trailing->padding);
+                            expect(std::abs(caret->position.x - content.position.x) < 1.F);
+                            expect(std::abs(caret->position.y
+                                            - (content.position.y + *line_height + 2.F))
+                                   < 1.F);
+                        }
+                    }
+
+                    context.set_focused(std::nullopt);
+                    context.set_text_selection(std::nullopt, {});
+                }
             }
 
             // The slider is one rounded track with an accent fill and a

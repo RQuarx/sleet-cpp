@@ -282,7 +282,8 @@ auto sleet::txt::wrap(std::string_view     text,
         if (!width) return std::move(width.error()).unexpected();
 
         lines.push_back({ line, *width,
-                          chosen->kind == break_kind::mandatory or chosen->offset >= text.size() });
+                          chosen->kind == break_kind::mandatory or chosen->offset >= text.size(),
+                          start });
         start = chosen->offset;
     }
 

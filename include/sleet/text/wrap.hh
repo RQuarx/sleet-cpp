@@ -18,6 +18,9 @@ namespace sleet::txt
         /// text. Justified alignment leaves these lines at their natural
         /// width.
         bool hard_break = false;
+
+        /// Byte offset of the line's first character in the source text.
+        std::size_t begin = 0;
     };
 
 

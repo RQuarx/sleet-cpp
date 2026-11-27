@@ -173,4 +173,13 @@ namespace sleet::widget
     /// not valid UTF-8.
     [[nodiscard]]
     auto sanitize_single_line(std::string_view text) -> std::string;
+
+    /// Normalizes clipboard or input text for a multiline field. CRLF and CR
+    /// become LF, other control characters become spaces, and invalid UTF-8 is
+    /// rejected.
+    /// \param text The candidate text.
+    /// \return Valid multiline UTF-8 text, or an empty string when \p text is
+    /// not valid UTF-8.
+    [[nodiscard]]
+    auto sanitize_multiline(std::string_view text) -> std::string;
 }

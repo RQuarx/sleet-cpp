@@ -39,6 +39,16 @@ namespace sleet
     };
 
 
+    /// One laid-out line of text. Offsets are byte positions in the source,
+    /// and the end excludes the line break.
+    struct text_line
+    {
+        std::size_t begin = 0;
+        std::size_t end   = 0;
+        float       width = 0.F;
+    };
+
+
     /// Owns the SDL renderer resources needed to draw a finalized widget tree:
     /// fonts, the text texture cache, and the active theme.
     ///
@@ -63,6 +73,28 @@ namespace sleet
                           std::optional<float>     width_limit,
                           widget::text_wrap_mode   wrap = widget::text_wrap_mode::wrap)
             -> kei::result<math::vec2>;
+
+        /// Returns the height of one line in \p font, in logical points.
+        /// \param font The font to measure.
+        /// \return The line height, or an error when the font is unavailable.
+        [[nodiscard]]
+        auto line_height(const widget::font_spec &font) -> kei::result<float>;
+
+        /// Lays text out into visual lines using the same wrapping the
+        /// renderer uses. Useful for mapping caret offsets to lines and back.
+        /// \param text The text to lay out.
+        /// \param font The font used for measurement.
+        /// \param width_limit The content width, or \c std::nullopt to disable
+        /// wrapping.
+        /// \param wrap The wrapping mode.
+        /// \return One entry per visual line. Empty text yields one empty line,
+        /// and a trailing newline yields an empty final line.
+        [[nodiscard]]
+        auto measure_lines(std::string_view         text,
+                           const widget::font_spec &font,
+                           std::optional<float>     width_limit,
+                           widget::text_wrap_mode   wrap = widget::text_wrap_mode::wrap)
+            -> kei::result<std::vector<text_line>>;
 
         [[nodiscard]]
         auto render(const widget::node_data &root, const widget::layout_result &layout)
@@ -102,8 +134,10 @@ namespace sleet
         /// Sets the caret and selection drawn by a focused text input.
         /// \param id The text input widget.
         /// \param selection The caret and anchor byte offsets.
+        /// \param scroll_y Vertical scroll of a multiline field, in points.
         void set_text_selection(std::optional<widget::widget_id> id,
-                                widget::text_selection           selection) noexcept;
+                                widget::text_selection           selection,
+                                float                            scroll_y = 0.F) noexcept;
 
         void set_viewport(math::vec2 viewport) noexcept;
 

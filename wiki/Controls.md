@@ -14,7 +14,7 @@ Buttons, checkboxes, toggles, and radio buttons report their `action` in a
 | Kind | Source | Payload |
 | --- | --- | --- |
 | `text_edit` | Text input | `text` contains the new value |
-| `submit` | Text input | `text` contains the submitted value; emitted on Enter |
+| `submit` | Text input | `text` contains the submitted value; emitted on Enter (Ctrl/Cmd+Enter for a text area) |
 | `selection_changed` | Combo box | `text` contains the chosen option |
 | `slider_changed` | Slider | `value` contains the normalized value in `[0, 1]` |
 | `activate` | Button, checkbox, toggle, radio button | `action` contains the widget action |
@@ -59,6 +59,14 @@ A focused text input supports:
 - Ctrl/Cmd+Z for undo and Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y for redo;
 - double-click to select a word and triple-click to select the whole value;
 - Enter to submit and Escape to cancel a composition or clear focus.
+
+`text_area(value, action, hint)` uses the same editing behavior but is
+multiline. Enter inserts a newline, Ctrl/Cmd+Enter submits, and Up/Down move
+between visual lines while preserving the preferred horizontal position.
+Home/End go to the start or end of the current visual line; Ctrl/Cmd+Home and
+Ctrl/Cmd+End go to the start or end of the value. The field wraps by default,
+scrolls vertically to keep the caret visible, and accepts multiline paste with
+CRLF and CR normalized to LF.
 
 Focused buttons and selection controls activate with Enter or Space; focused
 sliders change value with the arrow keys. A focused combo box opens with Enter,

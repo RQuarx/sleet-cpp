@@ -20,6 +20,7 @@ Built-in widgets are thin compositions of those primitives:
 | --- | --- |
 | `button(text, action)` | Text button; also accepts arbitrary `node_data` content |
 | `text_input(value, action, hint)` | Single-line editable field |
+| `text_area(value, action, hint)` | Multiline wrapped editor; Ctrl/Cmd+Enter submits |
 | `combo_box(value, options, action, hint)` | Inline drop-down list |
 | `checkbox(text, checked, action)` | Labeled checkbox |
 | `toggle(text, on, action)` | Sliding on/off switch |
@@ -46,6 +47,7 @@ combo_box(current.color,
 
 ```cpp
 column()[text_input(current.name, "name", "Type your name..."),
+         text_area(current.notes, "notes", "Write a few lines..."),
          combo_box(current.color, { "Red", "Green", "Blue" }, "color", "Pick one"),
          row()[checkbox("Details", current.details, "details"),
                toggle("Notifications", current.notifications, "notifications")],

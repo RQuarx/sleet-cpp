@@ -226,6 +226,15 @@ namespace sleet::widget
     }
 
 
+    /// Enables multiline editing for a text input. Enter inserts a newline
+    /// instead of submitting, and Up and Down move between wrapped lines.
+    [[nodiscard]]
+    inline auto multiline(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.multiline = value; });
+    }
+
+
     /// Overrides horizontal text alignment without changing how child widgets
     /// are placed. Use \c halign for layout alignment.
     [[nodiscard]]

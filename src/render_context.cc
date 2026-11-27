@@ -77,39 +77,6 @@ namespace
     }
 
 
-    [[nodiscard]]
-    auto text_align_offset(text_alignment alignment, float free_space) noexcept -> float
-    {
-        const auto free = std::max(0.F, free_space);
-
-        switch (alignment)
-        {
-        case text_alignment::left:    return 0.F;
-        case text_alignment::center:  return free / 2.F;
-        case text_alignment::right:   return free;
-        case text_alignment::justify: return 0.F;
-        }
-
-        return 0.F;
-    }
-
-
-    [[nodiscard]]
-    auto resolved_text_alignment(const node_data &node) noexcept -> text_alignment
-    {
-        if (node.text_align) return *node.text_align;
-
-        switch (node.alignment.x)
-        {
-        case sleet::widget::align::start:  return text_alignment::left;
-        case sleet::widget::align::center: return text_alignment::center;
-        case sleet::widget::align::end:    return text_alignment::right;
-        }
-
-        return text_alignment::left;
-    }
-
-
     struct font_key
     {
         font_role          role  = font_role::body;
@@ -194,15 +161,20 @@ namespace
 
         /// Negative means "no width limit". Real limits are clamped to >= 0.
         float width_limit = -1.F;
+
+        /// Editors append an empty line after a trailing newline so the caret
+        /// has a line to sit on. Labels do not, so the variants stay separate.
+        bool trailing_line = false;
     };
 
 
     struct wrap_key_view
     {
         std::string_view text;
-        TTF_Font        *font        = nullptr;
-        text_wrap_mode   wrap        = text_wrap_mode::wrap;
-        float            width_limit = -1.F;
+        TTF_Font        *font          = nullptr;
+        text_wrap_mode   wrap          = text_wrap_mode::wrap;
+        float            width_limit   = -1.F;
+        bool             trailing_line = false;
     };
 
 
@@ -217,6 +189,8 @@ namespace
             if (lhs.wrap != rhs.wrap)
                 return static_cast<int>(lhs.wrap) < static_cast<int>(rhs.wrap);
             if (lhs.width_limit != rhs.width_limit) return lhs.width_limit < rhs.width_limit;
+            if (lhs.trailing_line != rhs.trailing_line)
+                return lhs.trailing_line < rhs.trailing_line;
             if (lhs.font != rhs.font) return std::less<const TTF_Font *> {}(lhs.font, rhs.font);
             return std::string_view { lhs.text } < rhs.text;
         }
@@ -507,6 +481,12 @@ struct sleet::render_context::impl
     std::optional<widget::widget_id> focused;
     std::optional<widget::widget_id> editing;
     widget::text_selection           selection;
+
+    /// Vertical scroll of the editing multiline field, and the last offset
+    /// reported for every field. Keeping the per-id values lets an unfocused
+    /// text area retain its scroll position.
+    float                                        selection_scroll = 0.F;
+    std::unordered_map<widget::widget_id, float> text_scrolls;
 
     /// Eased interaction progress supplied by the runtime. Empty until the
     /// runtime sets it; the renderer then falls back to binary hover/press.
@@ -869,17 +849,23 @@ struct sleet::render_context::impl
     auto wrapped_lines(const font_spec     &spec,
                        std::string_view     text,
                        std::optional<float> width_limit,
-                       text_wrap_mode       wrap)
+                       text_wrap_mode       wrap,
+                       bool                 trailing_line = false)
         -> kei::result<const std::vector<sleet::txt::wrapped_line> *>
     {
         auto primary = get_font(spec);
         if (!primary) return std::move(primary.error()).unexpected();
 
+        // Only a real trailing newline needs the synthetic line. Normalizing
+        // here also lets editors share the label cache for other text.
+        trailing_line = trailing_line and !text.empty() and text.back() == '\n';
+
         auto limit
             = width_limit.transform([](float width) noexcept { return std::max(0.F, width); });
         if (wrap == text_wrap_mode::no_wrap) limit.reset();
 
-        const auto lookup = wrap_key_view { text, *primary, wrap, limit.value_or(-1.F) };
+        const auto lookup
+            = wrap_key_view { text, *primary, wrap, limit.value_or(-1.F), trailing_line };
 
         if (auto it = wrap_cache.find(lookup); it != wrap_cache.end())
         {
@@ -904,7 +890,8 @@ struct sleet::render_context::impl
         }
 
         auto [it, inserted] = wrap_cache.emplace(
-            wrap_key { std::string { text }, *primary, wrap, lookup.width_limit }, wrap_entry {});
+            wrap_key { std::string { text }, *primary, wrap, lookup.width_limit, trailing_line },
+            wrap_entry {});
         (void)inserted;
 
         const auto measure = [this, &spec](std::string_view line) -> kei::result<float>
@@ -924,7 +911,25 @@ struct sleet::render_context::impl
 
         it->second.lines     = std::move(*lines);
         it->second.last_used = ++cache_clock;
+
+        if (trailing_line)
+            it->second.lines.push_back({ std::string_view {}, 0.F, true, text.size() });
+
         return &it->second.lines;
+    }
+
+
+    /// Wraps text for an editor. A trailing newline opens a final empty line,
+    /// which \c txt::wrap does not emit because labels do not need it. The
+    /// editor does, so the caret can sit on the line the user just created.
+    [[nodiscard]]
+    auto editor_lines(const font_spec     &spec,
+                      std::string_view     text,
+                      std::optional<float> width_limit,
+                      text_wrap_mode       wrap)
+        -> kei::result<const std::vector<txt::wrapped_line> *>
+    {
+        return wrapped_lines(spec, text, width_limit, wrap, true);
     }
 
 
@@ -1396,7 +1401,7 @@ struct sleet::render_context::impl
             return draw_justified_line(line.text, *font, fg, content, line.width, top, line_height);
 
         const auto x
-            = content.position.x + text_align_offset(alignment, content.size.x - line.width);
+            = content.position.x + widget::text_alignment_offset(alignment, content.size.x - line.width);
 
         auto drawn = draw_text_run(line.text, *font, fg, x, top, line_height);
         if (!drawn) return std::move(drawn.error()).unexpected();
@@ -1454,7 +1459,7 @@ struct sleet::render_context::impl
         text_input_view view { .caret_x = *width };
 
         if (*total + trailing_width <= available_width)
-            view.offset = text_align_offset(alignment, available_width - *total - trailing_width);
+            view.offset = widget::text_alignment_offset(alignment, available_width - *total - trailing_width);
         else
         {
             const auto overflow
@@ -1511,6 +1516,326 @@ struct sleet::render_context::impl
     }
 
 
+    /// Returns the wrapped line that contains \p offset. A caret at the end of
+    /// a line belongs to that line; one at the start of the next line belongs
+    /// to the next line.
+    [[nodiscard]]
+    static auto line_at(const std::vector<sleet::txt::wrapped_line> &lines,
+                        std::size_t                                 offset) noexcept -> std::size_t
+    {
+        for (std::size_t i = 0; i + 1 < lines.size(); i++)
+            if (offset < lines[i + 1].begin) return i;
+
+        return lines.size() - 1;
+    }
+
+
+    /// Measures the caret's horizontal position inside one wrapped line.
+    [[nodiscard]]
+    auto caret_x_in_line(const node_data                    &node,
+                         const sleet::txt::wrapped_line     &line,
+                         std::size_t                         offset) -> kei::result<float>
+    {
+        const auto end = line.begin + line.text.size();
+        offset         = std::clamp(offset, line.begin, end);
+        if (offset == line.begin) return 0.F;
+
+        const auto prefix
+            = std::string_view { node.text }.substr(line.begin, offset - line.begin);
+        auto font = get_font_covering(node.font, prefix);
+        if (!font) return std::move(font.error()).unexpected();
+        return measure_line(*font, prefix);
+    }
+
+
+    /// Returns the closest caret offset to \p x inside one wrapped line.
+    [[nodiscard]]
+    auto offset_in_line(const node_data                &node,
+                        const sleet::txt::wrapped_line &line,
+                        float                           x) -> kei::result<std::size_t>
+    {
+        const auto end = line.begin + line.text.size();
+        if (line.text.empty()) return line.begin;
+
+        auto best          = line.begin;
+        auto best_distance = std::abs(x);
+        auto offset        = line.begin;
+
+        while (offset < end)
+        {
+            auto next = widget::next_offset(node.text, offset);
+            if (next <= offset) break;
+            if (next > end) next = end;
+
+            auto width = caret_x_in_line(node, line, next);
+            if (!width) return std::move(width.error()).unexpected();
+
+            const auto distance = std::abs(*width - x);
+            if (distance < best_distance)
+            {
+                best          = next;
+                best_distance = distance;
+            }
+
+            offset = next;
+        }
+
+        return best;
+    }
+
+
+    struct line_caret
+    {
+        std::size_t line = 0;
+        float       x    = 0.F;
+    };
+
+
+    [[nodiscard]]
+    auto caret_in_lines(const node_data                            &node,
+                        const std::vector<sleet::txt::wrapped_line> &lines,
+                        std::size_t                                 offset) -> kei::result<line_caret>
+    {
+        if (lines.empty()) return line_caret {};
+
+        const auto index = line_at(lines, offset);
+        auto       x     = caret_x_in_line(node, lines[index], offset);
+        if (!x) return std::move(x.error()).unexpected();
+
+        return line_caret { index, *x };
+    }
+
+
+    [[nodiscard]]
+    auto draw_text_area(const node_data &node, const rect &bounds, color fg) -> kei::result<>
+    {
+        const auto content = bounds.inset(node.padding);
+        if (content.size.x <= 0.F or content.size.y <= 0.F) return {};
+
+        const bool is_editing = editing and *editing == node.id;
+        const bool has_preedit
+            = is_editing and preedit_id and *preedit_id == node.id and !preedit_text.empty();
+        const auto text    = std::string_view { node.text };
+        const auto display = text.empty() ? (has_preedit ? std::string_view {}
+                                                         : std::string_view { node.placeholder })
+                                          : text;
+        const auto text_color
+            = text.empty() ? (is_disabled(node) ? fg : theme.muted.value_or(fg)) : fg;
+
+        auto alignment = widget::text_alignment_of(node);
+        if (alignment == text_alignment::justify) alignment = text_alignment::left;
+
+        auto font = get_font(node.font);
+        if (!font) return std::move(font.error()).unexpected();
+
+        auto clip = enter_text_clip(content);
+        if (!clip) return std::move(clip.error()).unexpected();
+        if (!*clip) return {};
+
+        const auto restore_after = [this, &clip](kei::result<> result) -> kei::result<>
+        {
+            auto restored = leave_text_clip(**clip);
+            if (!result) return result;
+            return restored;
+        };
+
+        auto lines = editor_lines(node.font, text, content.size.x, node.wrap);
+        if (!lines) return restore_after(std::move(lines.error()).unexpected());
+        const auto &wrapped = **lines;
+
+        const auto line_height
+            = static_cast<float>(std::max(1, TTF_GetFontHeight(*font))) / pixel_scale;
+        const auto line_count   = std::max<std::size_t>(1, wrapped.size());
+        const auto total_height = line_height * static_cast<float>(line_count);
+        const auto stored_scroll
+            = text_scrolls.contains(node.id) ? text_scrolls[node.id] : 0.F;
+        const auto scroll_y
+            = std::clamp(stored_scroll, 0.F, std::max(0.F, total_height - content.size.y));
+
+        // The placeholder is a single line. Its width also positions the caret
+        // when the value is empty.
+        auto empty_line_width = 0.F;
+        if (text.empty() and !has_preedit)
+        {
+            auto width = measure_line(*font, node.placeholder);
+            if (width) empty_line_width = *width;
+        }
+
+        const auto line_width = [&](std::size_t index) -> float
+        {
+            if (wrapped.empty()) return empty_line_width;
+            return wrapped[index].width;
+        };
+
+        const auto line_left = [&](std::size_t index) -> float
+        {
+            return content.position.x
+                 + widget::text_alignment_offset(alignment, content.size.x - line_width(index));
+        };
+
+        if (is_editing and selection.has_selection() and !text.empty())
+        {
+            for (std::size_t i = 0; i < wrapped.size(); i++)
+            {
+                const auto &line  = wrapped[i];
+                const auto  end   = line.begin + line.text.size();
+                const auto  first = std::max(selection.begin(), line.begin);
+                const auto  last  = std::min(selection.end(), end);
+                const auto  top
+                    = content.position.y + (line_height * static_cast<float>(i)) - scroll_y;
+
+                if (first < last)
+                {
+                    auto x1 = caret_x_in_line(node, line, first);
+                    if (!x1) return restore_after(std::move(x1.error()).unexpected());
+
+                    auto x2 = caret_x_in_line(node, line, last);
+                    if (!x2) return restore_after(std::move(x2.error()).unexpected());
+
+                    const rect highlight {
+                        line_left(i) + std::min(*x1, *x2),
+                        top + 2.F,
+                        std::abs(*x2 - *x1),
+                        std::max(0.F, line_height - 4.F),
+                    };
+
+                    if (highlight.size.x > 0.F)
+                        if (auto res = fill_logical(
+                                highlight, theme.selection.value_or(color { 47, 95, 168, 255 }));
+                            !res)
+                            return restore_after(std::move(res));
+                }
+
+                // A selected newline gets a small marker after the line.
+                if (end < text.size() and text[end] == '\n' and selection.begin() <= end
+                    and selection.end() > end)
+                {
+                    auto space = measure_line(*font, " ");
+                    if (!space) return restore_after(std::move(space.error()).unexpected());
+
+                    const rect highlight {
+                        line_left(i) + line.width,
+                        top + 2.F,
+                        *space,
+                        std::max(0.F, line_height - 4.F),
+                    };
+
+                    if (auto res = fill_logical(
+                            highlight, theme.selection.value_or(color { 47, 95, 168, 255 }));
+                        !res)
+                        return restore_after(std::move(res));
+                }
+            }
+        }
+
+        if (!display.empty())
+        {
+            if (wrapped.empty())
+            {
+                auto display_font = get_font_covering(node.font, display);
+                if (!display_font)
+                    return restore_after(std::move(display_font.error()).unexpected());
+
+                if (auto res = draw_text_run(display, *display_font, text_color, line_left(0),
+                                             content.position.y, line_height);
+                    !res)
+                    return restore_after(std::move(res.error()).unexpected());
+            }
+            else
+            {
+                for (std::size_t i = 0; i < wrapped.size(); i++)
+                {
+                    if (wrapped[i].text.empty()) continue;
+
+                    const auto top
+                        = content.position.y + (line_height * static_cast<float>(i)) - scroll_y;
+                    if (top + line_height <= content.position.y
+                        or top >= content.position.y + content.size.y)
+                        continue;
+
+                    auto line_font = get_font_covering(node.font, wrapped[i].text);
+                    if (!line_font)
+                        return restore_after(std::move(line_font.error()).unexpected());
+
+                    if (auto res = draw_text_run(wrapped[i].text, *line_font, text_color,
+                                                 line_left(i), top, line_height);
+                        !res)
+                        return restore_after(std::move(res.error()).unexpected());
+                }
+            }
+        }
+
+        auto caret_line = std::size_t { 0 };
+        auto caret_x    = 0.F;
+
+        if (is_editing and !wrapped.empty())
+        {
+            auto position = caret_in_lines(node, wrapped, selection.caret);
+            if (!position) return restore_after(std::move(position.error()).unexpected());
+            caret_line = position->line;
+            caret_x    = position->x;
+        }
+
+        if (has_preedit)
+        {
+            auto preedit_font = get_font_covering(node.font, preedit_text);
+            if (!preedit_font) return restore_after(std::move(preedit_font.error()).unexpected());
+
+            auto entry = get_text_texture(preedit_text, *preedit_font, fg);
+            if (!entry) return restore_after(std::move(entry.error()).unexpected());
+
+            const auto top
+                = content.position.y + (line_height * static_cast<float>(caret_line)) - scroll_y;
+            const auto x = line_left(caret_line) + caret_x;
+
+            const auto      logical_height = (*entry)->size.y / pixel_scale;
+            const SDL_FRect destination {
+                std::round(x * pixel_scale),
+                std::round((top + ((line_height - logical_height) / 2.F)) * pixel_scale),
+                (*entry)->size.x,
+                (*entry)->size.y,
+            };
+
+            if (!SDL_RenderTexture(renderer, (*entry)->texture, nullptr, &destination))
+                return restore_after(sleet::sdl_error { "Failed to draw text." }.unexpected());
+
+            auto width = measure_line(*preedit_font, preedit_text);
+            if (!width) return restore_after(std::move(width.error()).unexpected());
+
+            const rect underline { x, top + line_height - 2.F, *width, 1.F };
+            if (auto res = fill_logical(underline, theme.caret.value_or(fg)); !res)
+                return restore_after(std::move(res));
+
+            const auto caret_offset = widget::clamp_offset(preedit_text, preedit_caret);
+            auto       prefix       = measure_line(
+                *preedit_font, std::string_view { preedit_text }.substr(0, caret_offset));
+            if (!prefix) return restore_after(std::move(prefix.error()).unexpected());
+            caret_x += *prefix;
+        }
+
+        if (is_editing)
+        {
+            const auto top
+                = content.position.y + (line_height * static_cast<float>(caret_line)) - scroll_y;
+            const auto caret_left = std::clamp(line_left(caret_line) + caret_x, content.position.x,
+                                               content.position.x
+                                                   + std::max(0.F, content.size.x - 2.F));
+
+            const rect caret_rect {
+                caret_left,
+                top + 1.F,
+                2.F,
+                std::max(0.F, line_height - 2.F),
+            };
+
+            if (auto res = fill_logical(caret_rect, theme.caret.value_or(fg)); !res)
+                return restore_after(std::move(res));
+        }
+
+        return restore_after({});
+    }
+
+
     [[nodiscard]]
     auto draw_text_input(const node_data &node, const rect &bounds, color fg) -> kei::result<>
     {
@@ -1527,7 +1852,7 @@ struct sleet::render_context::impl
         const auto text_color
             = text.empty() ? (is_disabled(node) ? fg : theme.muted.value_or(fg)) : fg;
 
-        auto alignment = resolved_text_alignment(node);
+        auto alignment = widget::text_alignment_of(node);
         if (alignment == text_alignment::justify) alignment = text_alignment::left;
 
         auto font = get_font_covering(node.font, display);
@@ -1668,7 +1993,10 @@ struct sleet::render_context::impl
         if (auto res = draw_text_frame(node, bounds, active); !res) return res;
 
         if (node.control == widget::control_kind::text_input)
+        {
+            if (node.multiline) return draw_text_area(node, bounds, fg);
             return draw_text_input(node, bounds, fg);
+        }
 
         if (content.size.x <= 0.F or content.size.y <= 0.F) return {};
 
@@ -1681,7 +2009,7 @@ struct sleet::render_context::impl
         if (!*clip) return {};
 
         auto drawn    = draw_text_lines(node, content, node.font, *font, fg, **lines,
-                                        resolved_text_alignment(node));
+                                        widget::text_alignment_of(node));
         auto restored = leave_text_clip(**clip);
 
         if (!drawn) return drawn;
@@ -2246,6 +2574,37 @@ auto sleet::render_context::measure_text(std::string_view         text,
 }
 
 
+auto sleet::render_context::line_height(const widget::font_spec &font) -> kei::result<float>
+{
+    auto ttf_font = m_impl->get_font(font);
+    if (!ttf_font) return std::move(ttf_font.error()).unexpected();
+
+    return static_cast<float>(std::max(1, TTF_GetFontHeight(*ttf_font))) / m_impl->pixel_scale;
+}
+
+
+auto sleet::render_context::measure_lines(std::string_view         text,
+                                          const widget::font_spec &font,
+                                          std::optional<float>     width_limit,
+                                          widget::text_wrap_mode   wrap)
+    -> kei::result<std::vector<text_line>>
+{
+    if (text.empty()) return std::vector<text_line> { text_line {} };
+
+    auto lines = m_impl->editor_lines(font, text, width_limit, wrap);
+    if (!lines) return std::move(lines.error()).unexpected();
+
+    std::vector<text_line> result;
+    result.reserve((*lines)->size());
+
+    for (const auto &line : **lines)
+        result.push_back({ line.begin, line.begin + line.text.size(), line.width });
+
+    if (result.empty()) result.push_back(text_line {});
+    return result;
+}
+
+
 auto sleet::render_context::render(const widget::node_data     &root,
                                    const widget::layout_result &layout) -> kei::result<>
 {
@@ -2345,10 +2704,14 @@ void sleet::render_context::set_focused(std::optional<widget::widget_id> id) noe
 { m_impl->focused = std::move(id); }
 
 void sleet::render_context::set_text_selection(std::optional<widget::widget_id> id,
-                                               widget::text_selection           selection) noexcept
+                                               widget::text_selection           selection,
+                                               float                            scroll_y) noexcept
 {
-    m_impl->editing   = std::move(id);
-    m_impl->selection = selection;
+    m_impl->editing          = std::move(id);
+    m_impl->selection        = selection;
+    m_impl->selection_scroll = std::isfinite(scroll_y) ? std::max(0.F, scroll_y) : 0.F;
+
+    if (m_impl->editing) m_impl->text_scrolls[*m_impl->editing] = m_impl->selection_scroll;
 }
 
 void sleet::render_context::set_viewport(math::vec2 viewport) noexcept
@@ -2400,8 +2763,46 @@ auto sleet::render_context::text_input_caret_rect(const widget::node_data      &
         preedit_prefix = *prefix;
     }
 
-    auto alignment = resolved_text_alignment(node);
+    auto alignment = widget::text_alignment_of(node);
     if (alignment == text_alignment::justify) alignment = text_alignment::left;
+
+    if (node.multiline)
+    {
+        auto lines = m_impl->editor_lines(node.font, node.text, content.size.x, node.wrap);
+        if (!lines) return std::nullopt;
+
+        const auto line_height
+            = static_cast<float>(std::max(1, TTF_GetFontHeight(*font))) / m_impl->pixel_scale;
+        const auto scroll = [&]
+        {
+            const auto it = m_impl->text_scrolls.find(node.id);
+            return it != m_impl->text_scrolls.end() ? it->second : 0.F;
+        }();
+
+        auto index = std::size_t { 0 };
+        auto caret_x = 0.F;
+
+        if (!(*lines)->empty())
+        {
+            auto position = m_impl->caret_in_lines(node, **lines, selection.caret);
+            if (!position) return std::nullopt;
+            index   = position->line;
+            caret_x = position->x;
+        }
+
+        const auto line_width = (*lines)->empty() ? 0.F : (**lines)[index].width;
+        const auto left       = content.position.x
+                        + widget::text_alignment_offset(alignment, content.size.x - line_width);
+
+        if (has_preedit) caret_x += preedit_prefix;
+
+        return math::rect {
+            left + caret_x,
+            content.position.y + (line_height * static_cast<float>(index)) - scroll + 2.F,
+            2.F,
+            std::max(0.F, line_height - 4.F),
+        };
+    }
 
     auto view = m_impl->text_input_caret(*font, node.text, content.size.x, selection, alignment,
                                          preedit_width);

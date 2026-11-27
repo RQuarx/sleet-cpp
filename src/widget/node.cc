@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstddef>
 #include <format>
 #include <stdexcept>
@@ -60,6 +61,7 @@ namespace
         self.font             = std::forward<Other>(other).font;
         self.wrap             = std::forward<Other>(other).wrap;
         self.text_align       = std::forward<Other>(other).text_align;
+        self.multiline        = std::forward<Other>(other).multiline;
         self.gap              = std::forward<Other>(other).gap;
         self.alignment        = std::forward<Other>(other).alignment;
         self.main_axis        = std::forward<Other>(other).main_axis;
@@ -247,4 +249,36 @@ auto node_data::finalize_impl(std::unordered_set<std::string_view> &seen,
     }
 
     return {};
+}
+
+
+auto sleet::widget::text_alignment_of(const node_data &node) noexcept -> text_alignment
+{
+    if (node.text_align) return *node.text_align;
+
+    switch (node.alignment.x)
+    {
+    case align::center: return text_alignment::center;
+    case align::end:    return text_alignment::right;
+    case align::start:  break;
+    }
+
+    return text_alignment::left;
+}
+
+
+auto sleet::widget::text_alignment_offset(text_alignment alignment, float free_space) noexcept
+    -> float
+{
+    const auto free = std::max(0.F, free_space);
+
+    switch (alignment)
+    {
+    case text_alignment::left:    return 0.F;
+    case text_alignment::center:  return free / 2.F;
+    case text_alignment::right:   return free;
+    case text_alignment::justify: return 0.F;
+    }
+
+    return 0.F;
 }

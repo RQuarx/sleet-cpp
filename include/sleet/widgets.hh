@@ -112,6 +112,24 @@ namespace sleet::widget
                     std::source_location origin = std::source_location::current())
         -> text_input_node;
 
+    /// A multiline text editor with wrapped lines.
+    ///
+    /// Enter inserts a line break and Ctrl/Cmd+Enter reports
+    /// \c event::kind::submit. Edits are reported as \c event::kind::text_edit
+    /// with the full value in \c event::text. The default height is 120 points;
+    /// apply \c height() to change it.
+    /// \param value The current value from application state.
+    /// \param action The action reported by edit and submit events.
+    /// \param hint Placeholder text shown while the value is empty.
+    /// \param origin The source location used for diagnostics.
+    /// \return The text area widget.
+    [[nodiscard]]
+    auto text_area(std::string          value,
+                   std::string          action,
+                   std::string          hint   = {},
+                   std::source_location origin = std::source_location::current())
+        -> text_input_node;
+
     /// A combo box with an inline option list.
     ///
     /// Clicking the header opens the list. Choosing an option reports

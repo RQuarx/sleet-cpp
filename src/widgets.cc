@@ -128,6 +128,18 @@ auto sleet::widget::text_input(std::string          value,
 }
 
 
+auto sleet::widget::text_area(std::string          value,
+                              std::string          action,
+                              std::string          hint,
+                              std::source_location origin) -> text_input_node
+{
+    return label_node { std::move(value), origin } | padding(8.F, 10.F) | width(sizing::fill())
+         | height(120.F) | control(control_kind::text_input) | focusable()
+         | on_click(std::move(action)) | placeholder(std::move(hint))
+         | text_wrap(text_wrap_mode::wrap) | multiline() | transition(0.12F);
+}
+
+
 auto sleet::widget::combo_box(std::string              value,
                               std::vector<std::string> options,
                               std::string              action,

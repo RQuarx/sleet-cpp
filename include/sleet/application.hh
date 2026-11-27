@@ -786,6 +786,14 @@ namespace sleet
             bool                             tooltip_visible = false;
 
             std::unordered_map<widget::widget_id, widget::text_selection> edits;
+
+            /// Vertical scroll of each multiline field, in points.
+            std::unordered_map<widget::widget_id, float> text_scrolls;
+
+            /// Preferred horizontal caret position while Up and Down move
+            /// between visual lines of a multiline field.
+            std::unordered_map<widget::widget_id, float> text_caret_goals;
+
             std::unordered_set<widget::widget_id>                         open_combos;
 
             /// Wheel offsets, clamped to the measured content after layout.
@@ -1618,27 +1626,67 @@ namespace sleet
 
 
         [[nodiscard]]
-        auto caret_at(render_context          &context,
-                      const widget::node_data &node,
-                      const math::rect        &bounds,
-                      float                    x) const -> std::size_t
+        static auto visual_line_at(const std::vector<text_line> &lines,
+                                   std::size_t                   offset) noexcept -> std::size_t
         {
-            const auto content = bounds.inset(node.padding);
-            const auto target  = x - content.position.x;
-            if (target <= 0.F) return 0;
+            for (std::size_t i = 0; i + 1 < lines.size(); i++)
+                if (offset < lines[i + 1].begin) return i;
 
-            // Build the grapheme boundaries once, then binary-search the prefix
-            // widths. This turns click-to-caret from O(n) text measurements
-            // into O(log n).
-            auto offsets = std::vector<std::size_t> { 0 };
-            while (offsets.back() < node.text.size())
-                offsets.push_back(widget::next_offset(node.text, offsets.back()));
+            return lines.empty() ? 0 : lines.size() - 1;
+        }
+
+
+        [[nodiscard]]
+        static auto text_alignment_for(const widget::node_data &node) noexcept
+            -> widget::text_alignment
+        {
+            auto alignment = widget::text_alignment_of(node);
+            if (alignment == widget::text_alignment::justify)
+                alignment = widget::text_alignment::left;
+            return alignment;
+        }
+
+
+        [[nodiscard]]
+        auto line_left(const widget::node_data &node,
+                       const text_line          &line,
+                       float                     available_width) const noexcept -> float
+        {
+            return widget::text_alignment_offset(text_alignment_for(node),
+                                                 available_width - line.width);
+        }
+
+
+        /// Finds the closest caret offset in \p [begin, end] to \p target,
+        /// measured from the start of the line. Prefix widths are monotonic, so
+        /// the boundary search is logarithmic after one grapheme walk.
+        [[nodiscard]]
+        auto closest_offset(render_context          &context,
+                            const widget::node_data &node,
+                            std::size_t              begin,
+                            std::size_t              end,
+                            float                    target) const -> std::size_t
+        {
+            begin = std::min(begin, node.text.size());
+            end   = std::min(std::max(begin, end), node.text.size());
+            if (target <= 0.F or begin >= end) return begin;
+
+            auto offsets = std::vector<std::size_t> { begin };
+            while (offsets.back() < end)
+            {
+                const auto next = widget::next_offset(node.text, offsets.back());
+                if (next <= offsets.back()) break;
+                offsets.push_back(std::min(next, end));
+            }
 
             const auto width_at = [&](std::size_t index) -> std::optional<float>
             {
-                auto width
-                    = context.measure_text(std::string_view { node.text }.substr(0, offsets[index]),
-                                           node.font, std::nullopt);
+                const auto length = offsets[index] - begin;
+                if (length == 0) return 0.F;
+
+                auto width = context.measure_text(
+                    std::string_view { node.text }.substr(begin, length), node.font, std::nullopt,
+                    widget::text_wrap_mode::no_wrap);
                 if (!width) return std::nullopt;
                 return width->x;
             };
@@ -1673,6 +1721,70 @@ namespace sleet
         }
 
 
+        /// Measures the caret's horizontal offset inside one visual line.
+        [[nodiscard]]
+        auto caret_x_in_line(render_context          &context,
+                             const widget::node_data &node,
+                             const text_line          &line,
+                             std::size_t              offset) const -> float
+        {
+            const auto end = std::min(line.end, node.text.size());
+            const auto at  = std::clamp(offset, line.begin, end);
+            if (at <= line.begin) return 0.F;
+
+            auto width = context.measure_text(std::string_view { node.text }.substr(
+                                                  line.begin, at - line.begin),
+                                              node.font, std::nullopt,
+                                              widget::text_wrap_mode::no_wrap);
+            return width ? width->x : 0.F;
+        }
+
+
+        [[nodiscard]]
+        auto caret_at(render_context          &context,
+                      const widget::node_data &node,
+                      const math::rect        &bounds,
+                      float                    x) const -> std::size_t
+        {
+            const auto content = bounds.inset(node.padding);
+            const auto target  = x - content.position.x;
+            return closest_offset(context, node, 0, node.text.size(), target);
+        }
+
+
+        /// Maps a pointer position to a byte offset in a multiline field.
+        [[nodiscard]]
+        auto multiline_caret_at(render_context          &context,
+                                const widget::node_data &node,
+                                const math::rect        &bounds,
+                                math::vec2               point,
+                                float                    scroll_y) const -> std::size_t
+        {
+            const auto content = bounds.inset(node.padding);
+            if (content.size.x <= 0.F or content.size.y <= 0.F) return node.text.size();
+
+            auto lines = context.measure_lines(node.text, node.font, content.size.x, node.wrap);
+            if (!lines or lines->empty()) return node.text.size();
+
+            auto line_height = context.line_height(node.font);
+            if (!line_height or *line_height <= 0.F) return node.text.size();
+
+            const auto relative_y = point.y - content.position.y + scroll_y;
+            const auto total      = *line_height * static_cast<float>(lines->size());
+            if (relative_y >= total) return node.text.size();
+
+            const auto index      = static_cast<std::size_t>(std::clamp(
+                std::floor(relative_y / *line_height), 0.F,
+                static_cast<float>(lines->size() - 1)));
+
+            const auto &line   = (*lines)[index];
+            const auto  left   = content.position.x + line_left(node, line, content.size.x);
+            const auto  target = point.x - left;
+
+            return closest_offset(context, node, line.begin, line.end, target);
+        }
+
+
         [[nodiscard]]
         auto text_scroll(render_context          &context,
                          const widget::node_data &node,
@@ -1684,10 +1796,45 @@ namespace sleet
 
             const auto offset = widget::clamp_offset(node.text, caret);
             auto width = context.measure_text(std::string_view { node.text }.substr(0, offset),
-                                              node.font, std::nullopt);
+                                              node.font, std::nullopt,
+                                              widget::text_wrap_mode::no_wrap);
             if (!width) return 0.F;
 
             return std::max(0.F, width->x - content.size.x + 2.F);
+        }
+
+
+        /// Scrolls a multiline field just enough to reveal \p caret, then
+        /// clamps the offset to the content height.
+        auto update_text_scroll(render_context          &context,
+                                session                 &current,
+                                const widget::node_data &node,
+                                const math::rect        &bounds,
+                                std::size_t              caret) const -> float
+        {
+            auto &scroll = current.text_scrolls[node.id];
+
+            const auto content = bounds.inset(node.padding);
+            if (content.size.y <= 0.F) return scroll;
+
+            auto lines = context.measure_lines(node.text, node.font, content.size.x, node.wrap);
+            if (!lines or lines->empty()) return scroll;
+
+            auto line_height = context.line_height(node.font);
+            if (!line_height or *line_height <= 0.F) return scroll;
+
+            const auto index = visual_line_at(*lines, caret);
+            const auto top   = *line_height * static_cast<float>(index);
+            const auto bottom = top + *line_height;
+
+            if (top < scroll)
+                scroll = top;
+            else if (bottom > scroll + content.size.y)
+                scroll = bottom - content.size.y;
+
+            const auto total = *line_height * static_cast<float>(lines->size());
+            scroll = std::clamp(scroll, 0.F, std::max(0.F, total - content.size.y));
+            return scroll;
         }
 
 
@@ -1702,8 +1849,8 @@ namespace sleet
 
 
         /// Inserts the clipboard into \p node when it contains non-empty
-        /// single-line text. Returns whether the text changed, so a no-op
-        /// paste does not create a spurious undo step.
+        /// text. Returns whether the text changed, so a no-op paste does not
+        /// create a spurious undo step.
         auto paste_clipboard(session                &current,
                              widget::node_data      &node,
                              widget::text_selection &edit) const -> bool
@@ -1711,7 +1858,8 @@ namespace sleet
             auto *clipboard = SDL_GetClipboardText();
             if (clipboard == nullptr) return false;
 
-            const auto text = widget::sanitize_single_line(clipboard);
+            const auto text = node.multiline ? widget::sanitize_multiline(clipboard)
+                                             : widget::sanitize_single_line(clipboard);
             SDL_free(clipboard);
             if (text.empty()) return false;
 
@@ -1773,6 +1921,7 @@ namespace sleet
 
 
         auto handle_text_input_key(session           &current,
+                                   render_context    &context,
                                    widget::node_data &node,
                                    const SDL_Event   &native) -> bool
         {
@@ -1787,6 +1936,8 @@ namespace sleet
             const bool command = ctrl or gui;
             const bool by_word = command or alt;
 
+            const auto *bounds = current.layout ? current.layout->find(node.id) : nullptr;
+
             switch (native.key.key)
             {
             case SDLK_BACKSPACE:
@@ -1795,6 +1946,7 @@ namespace sleet
                 if (by_word ? widget::erase_word_backward(node.text, edit)
                             : widget::erase_backward(node.text, edit))
                     apply_text_edit(current, node);
+                current.text_caret_goals.erase(node.id);
                 return true;
 
             case SDLK_DELETE:
@@ -1803,6 +1955,7 @@ namespace sleet
                 if (by_word ? widget::erase_word_forward(node.text, edit)
                             : widget::erase_forward(node.text, edit))
                     apply_text_edit(current, node);
+                current.text_caret_goals.erase(node.id);
                 return true;
 
             case SDLK_LEFT:
@@ -1810,6 +1963,7 @@ namespace sleet
                                    by_word ? widget::previous_word_offset(node.text, edit.caret)
                                            : widget::previous_offset(node.text, edit.caret),
                                    shift);
+                current.text_caret_goals.erase(node.id);
                 current.dirty = true;
                 return true;
 
@@ -1818,22 +1972,85 @@ namespace sleet
                                    by_word ? widget::next_word_offset(node.text, edit.caret)
                                            : widget::next_offset(node.text, edit.caret),
                                    shift);
+                current.text_caret_goals.erase(node.id);
                 current.dirty = true;
                 return true;
+
+            case SDLK_UP:
+            case SDLK_DOWN:
+                {
+                    if (!node.multiline) return false;
+                    if (bounds == nullptr) return true;
+
+                    const auto content = bounds->inset(node.padding);
+                    auto lines = context.measure_lines(node.text, node.font, content.size.x,
+                                                       node.wrap);
+                    if (!lines or lines->empty()) return true;
+
+                    const auto index = visual_line_at(*lines, edit.caret);
+                    const auto goal  = [&]
+                    {
+                        if (const auto it = current.text_caret_goals.find(node.id);
+                            it != current.text_caret_goals.end())
+                            return it->second;
+                        return caret_x_in_line(context, node, (*lines)[index], edit.caret);
+                    }();
+
+                    current.text_caret_goals[node.id] = goal;
+
+                    auto target = std::size_t { 0 };
+                    if (native.key.key == SDLK_UP)
+                    {
+                        if (index == 0)
+                            target = 0;
+                        else
+                        {
+                            const auto &line = (*lines)[index - 1];
+                            target = closest_offset(context, node, line.begin, line.end, goal);
+                        }
+                    }
+                    else if (index + 1 >= lines->size())
+                        target = node.text.size();
+                    else
+                    {
+                        const auto &line = (*lines)[index + 1];
+                        target = closest_offset(context, node, line.begin, line.end, goal);
+                    }
+
+                    widget::move_caret(node.text, edit, target, shift);
+                    current.dirty = true;
+                    return true;
+                }
 
             case SDLK_HOME:
-                widget::move_caret(node.text, edit, 0, shift);
-                current.dirty = true;
-                return true;
-
             case SDLK_END:
-                widget::move_caret(node.text, edit, node.text.size(), shift);
-                current.dirty = true;
-                return true;
+                {
+                    auto target = native.key.key == SDLK_HOME ? std::size_t { 0 }
+                                                              : node.text.size();
+
+                    if (node.multiline and !command and bounds != nullptr)
+                    {
+                        const auto content = bounds->inset(node.padding);
+                        auto lines = context.measure_lines(node.text, node.font, content.size.x,
+                                                           node.wrap);
+                        if (lines and !lines->empty())
+                        {
+                            const auto index = visual_line_at(*lines, edit.caret);
+                            target = native.key.key == SDLK_HOME ? (*lines)[index].begin
+                                                                 : (*lines)[index].end;
+                        }
+                    }
+
+                    widget::move_caret(node.text, edit, target, shift);
+                    current.text_caret_goals.erase(node.id);
+                    current.dirty = true;
+                    return true;
+                }
 
             case SDLK_A:
                 if (!command) return false;
                 widget::select_all(node.text, edit);
+                current.text_caret_goals.erase(node.id);
                 current.dirty = true;
                 return true;
 
@@ -1850,26 +2067,39 @@ namespace sleet
                     copy_selection(node, edit);
                     widget::insert_text(node.text, edit, {});
                     apply_text_edit(current, node);
+                    current.text_caret_goals.erase(node.id);
                 }
                 return true;
 
             case SDLK_V:
                 if (!command) return false;
                 (void)paste_clipboard(current, node, edit);
+                current.text_caret_goals.erase(node.id);
                 return true;
 
             case SDLK_Z:
                 if (!command) return false;
                 restore_snapshot(current, node, edit, !shift);
+                current.text_caret_goals.erase(node.id);
                 return true;
 
             case SDLK_Y:
                 if (!command) return false;
                 restore_snapshot(current, node, edit, false);
+                current.text_caret_goals.erase(node.id);
                 return true;
 
             case SDLK_RETURN:
             case SDLK_KP_ENTER:
+                if (node.multiline and !command)
+                {
+                    record_undo(current, node, edit);
+                    widget::insert_text(node.text, edit, "\n");
+                    apply_text_edit(current, node);
+                    current.text_caret_goals.erase(node.id);
+                    return true;
+                }
+
                 emit_control(current, event::kind::submit, node, node.text);
                 return true;
 
@@ -2073,7 +2303,8 @@ namespace sleet
         }
 
 
-        auto handle_control_key(session &current, const SDL_Event &native) -> bool
+        auto handle_control_key(session &current, render_context &context, const SDL_Event &native)
+            -> bool
         {
             auto *node = focused_node(current);
             if (node == nullptr or !_impl::effectively_visible(*node)) return false;
@@ -2081,7 +2312,7 @@ namespace sleet
             switch (node->control)
             {
             case widget::control_kind::text_input:
-                return handle_text_input_key(current, *node, native);
+                return handle_text_input_key(current, context, *node, native);
             case widget::control_kind::slider:    return handle_slider_key(current, *node, native);
             case widget::control_kind::combo_box: return handle_combo_key(current, *node, native);
             case widget::control_kind::combo_option:
@@ -2177,7 +2408,7 @@ namespace sleet
         void handle_control_press(session                 &current,
                                   render_context          &context,
                                   const widget::node_data *hit,
-                                  float                    x,
+                                  math::vec2               point,
                                   int                      clicks = 1)
         {
             const auto *target = _impl::control_target(hit);
@@ -2200,9 +2431,20 @@ namespace sleet
                     if (const auto *bounds
                         = current.layout ? current.layout->find(node->id) : nullptr)
                     {
-                        const auto scroll = text_scroll(context, *node, *bounds, edit.caret);
-                        caret             = caret_at(context, *node, *bounds, x + scroll);
+                        if (node->multiline)
+                        {
+                            const auto it     = current.text_scrolls.find(node->id);
+                            const auto scroll = it != current.text_scrolls.end() ? it->second : 0.F;
+                            caret = multiline_caret_at(context, *node, *bounds, point, scroll);
+                        }
+                        else
+                        {
+                            const auto scroll = text_scroll(context, *node, *bounds, edit.caret);
+                            caret = caret_at(context, *node, *bounds, point.x + scroll);
+                        }
                     }
+
+                    current.text_caret_goals.erase(node->id);
 
                     if (clicks >= 3)
                         widget::select_all(node->text, edit);
@@ -2223,7 +2465,7 @@ namespace sleet
             case widget::control_kind::slider:
                 focus_node(current, *node);
                 current.dragging = node->id;
-                update_slider(current, *node, x);
+                update_slider(current, *node, point.x);
                 break;
 
             case widget::control_kind::combo_box:
@@ -2254,9 +2496,17 @@ namespace sleet
                         edit.anchor = widget::clamp_offset(node->text, edit.anchor);
 
                         const auto scroll = text_scroll(context, *node, *bounds, edit.caret);
-                        widget::move_caret(node->text, edit,
-                                           caret_at(context, *node, *bounds, point.x + scroll),
-                                           true);
+                        const auto caret
+                            = node->multiline
+                                ? multiline_caret_at(
+                                      context, *node, *bounds, point,
+                                      current.text_scrolls.contains(node->id)
+                                          ? current.text_scrolls[node->id]
+                                          : 0.F)
+                                : caret_at(context, *node, *bounds, point.x + scroll);
+
+                        widget::move_caret(node->text, edit, caret, true);
+                        current.text_caret_goals.erase(node->id);
                         current.dirty = true;
                     }
             }
@@ -2315,7 +2565,7 @@ namespace sleet
             {
                 close_combos_outside(current, hit);
                 update_focus_from_hit(current, hit);
-                handle_control_press(current, context, hit, point.x,
+                handle_control_press(current, context, hit, point,
                                      static_cast<int>(native.button.clicks));
             }
 
@@ -2548,7 +2798,7 @@ namespace sleet
         }
 
 
-        void handle_key(session &current, const SDL_Event &native)
+        void handle_key(session &current, render_context &context, const SDL_Event &native)
         {
             if (native.type == SDL_EVENT_KEY_DOWN)
             {
@@ -2575,7 +2825,7 @@ namespace sleet
                     return;
                 }
 
-                if (handle_control_key(current, native)) return;
+                if (handle_control_key(current, context, native)) return;
             }
 
             auto value      = make_event(native.type == SDL_EVENT_KEY_DOWN ? event::kind::key_down
@@ -2602,7 +2852,9 @@ namespace sleet
                 if (node != nullptr and node->control == widget::control_kind::text_input
                     and _impl::effectively_visible(*node))
                 {
-                    const auto text = widget::sanitize_single_line(native.text.text);
+                    const auto text = node->multiline
+                                        ? widget::sanitize_multiline(native.text.text)
+                                        : widget::sanitize_single_line(native.text.text);
                     if (!text.empty())
                     {
                         auto &edit  = current.edits[node->id];
@@ -2611,6 +2863,7 @@ namespace sleet
                         record_undo(current, *node, edit);
                         widget::insert_text(node->text, edit, text);
                         apply_text_edit(current, *node);
+                        current.text_caret_goals.erase(node->id);
                     }
                     current.dirty = true;
                     return;
@@ -2636,7 +2889,8 @@ namespace sleet
                 return;
             }
 
-            auto text = widget::sanitize_single_line(native.edit.text);
+            auto text = node->multiline ? widget::sanitize_multiline(native.edit.text)
+                                        : widget::sanitize_single_line(native.edit.text);
             if (text.empty())
             {
                 current.preedit_id.reset();
@@ -2727,7 +2981,7 @@ namespace sleet
             case SDL_EVENT_MOUSE_WHEEL: handle_wheel(current, native); break;
 
             case SDL_EVENT_KEY_DOWN:
-            case SDL_EVENT_KEY_UP:   handle_key(current, native); break;
+            case SDL_EVENT_KEY_UP:   handle_key(current, context, native); break;
 
             case SDL_EVENT_TEXT_INPUT: handle_text_input(current, native); break;
 
@@ -2735,6 +2989,11 @@ namespace sleet
 
             default: break;
             }
+
+            // Start or stop text input as soon as focus changes. Presenting also
+            // synchronizes it, but a fast typist (or a synthetic key batch) can
+            // deliver the next text event before the frame is presented.
+            sync_text_input(current);
         }
 
 
@@ -3025,8 +3284,16 @@ namespace sleet
             if (focused_node_ptr != nullptr
                 and focused_node_ptr->control == widget::control_kind::text_input)
             {
+                auto scroll_y = 0.F;
+
+                if (focused_node_ptr->multiline and current.layout)
+                    if (const auto *bounds = current.layout->find(focused_node_ptr->id);
+                        bounds != nullptr)
+                        scroll_y = update_text_scroll(context, current, *focused_node_ptr, *bounds,
+                                                      current.edits[focused_node_ptr->id].caret);
+
                 context.set_text_selection(focused_node_ptr->id,
-                                           current.edits[focused_node_ptr->id]);
+                                           current.edits[focused_node_ptr->id], scroll_y);
 
                 if (current.preedit_id and *current.preedit_id == focused_node_ptr->id)
                     context.set_preedit(current.preedit_id, current.preedit_text,

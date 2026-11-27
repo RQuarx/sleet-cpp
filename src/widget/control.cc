@@ -231,3 +231,40 @@ auto sleet::widget::sanitize_single_line(std::string_view text) -> std::string
 
     return result;
 }
+
+
+auto sleet::widget::sanitize_multiline(std::string_view text) -> std::string
+{
+    if (!txt::ustring::from_utf8(text)) return {};
+
+    std::string result;
+    result.reserve(text.size());
+
+    for (std::size_t i = 0; i < text.size(); i++)
+    {
+        const auto value = static_cast<unsigned char>(text[i]);
+
+        if (value == '\r')
+        {
+            result.push_back('\n');
+            if (i + 1 < text.size() and text[i + 1] == '\n') i++;
+            continue;
+        }
+
+        if (value == '\n')
+        {
+            result.push_back('\n');
+            continue;
+        }
+
+        if (value < 0x20U or value == 0x7FU)
+        {
+            result.push_back(' ');
+            continue;
+        }
+
+        result.push_back(text[i]);
+    }
+
+    return result;
+}

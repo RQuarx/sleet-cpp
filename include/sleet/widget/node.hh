@@ -98,6 +98,11 @@ namespace sleet::widget
         /// so \c halign keeps working as a shorthand.
         std::optional<text_alignment> text_align;
 
+        /// Enables multiline editing for a text input: Enter inserts a newline,
+        /// Up and Down move between wrapped lines, and the runtime keeps the
+        /// caret scrolled into view. Ctrl/Cmd+Enter still submits.
+        bool multiline = false;
+
         float gap = 0.F;
 
         math::vec2_of<align> alignment { align::start, align::start };
@@ -412,4 +417,19 @@ namespace sleet::widget
         static auto prepare(Self &&self) -> std::remove_cvref_t<Self>
         { return std::forward<Self>(self); }
     };
+
+
+    /// Resolves the alignment used to paint text. An explicit \c text_align
+    /// wins; otherwise the node's horizontal layout alignment is used.
+    /// \param node The text-bearing node.
+    /// \return The effective text alignment.
+    [[nodiscard]]
+    auto text_alignment_of(const node_data &node) noexcept -> text_alignment;
+
+    /// Returns the horizontal offset of a line of text inside \p free_space.
+    /// \param alignment The line's text alignment.
+    /// \param free_space The unused width beside the line.
+    /// \return The left inset for the line.
+    [[nodiscard]]
+    auto text_alignment_offset(text_alignment alignment, float free_space) noexcept -> float;
 }

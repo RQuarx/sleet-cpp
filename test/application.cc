@@ -205,6 +205,236 @@ const boost::ut::suite application_tests = []
         expect(eq(observed.activates, 1));
     };
 
+    "Enter inserts a newline in a text area and Ctrl+Enter submits"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+            std::string text;
+            int         submits = 0;
+        };
+
+        struct message
+        {
+            std::string action;
+            std::string text;
+        };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto result
+            = app { "sleet-text-area-test", 320, 240, std::move(theme) }
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message {} }; })
+                  .on_update(
+                      [](state &current, const message &value) -> kei::result<>
+                      {
+                          if (value.action.empty())
+                              current.text = value.text;
+                          else if (value.action == "notes")
+                              current.submits++;
+                          return {};
+                      })
+                  .on_view(
+                      [&observed](const state &current)
+                      {
+                          observed = current;
+                          return column()[text_area(current.text, "notes", "Notes")];
+                      })
+                  .on_event(
+                      [](const sleet::event &input) -> std::optional<message>
+                      {
+                          if (input.type == sleet::event::kind::text_edit and input.action == "notes")
+                              return message { {}, input.text };
+                          if (input.type == sleet::event::kind::submit and input.action == "notes")
+                              return message { "notes", {} };
+                          return std::nullopt;
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1:  push_key(SDLK_TAB); break;
+                          case 2:  push_text("a"); break;
+                          case 3:  push_key(SDLK_RETURN); break;
+                          case 4:  push_text("b"); break;
+                          case 5:  push_key(SDLK_RETURN, SDL_KMOD_CTRL); break;
+                          case 6:  push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.text, std::string { "a\nb" }));
+        expect(eq(observed.submits, 1));
+    };
+
+    "a text area moves by visual lines and keeps Home and End line-aware"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+            std::string text = "ab\ncd";
+            int         submits = 0;
+        };
+
+        struct message
+        {
+            std::string action;
+            std::string text;
+        };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto result
+            = app { "sleet-text-area-lines-test", 320, 240, std::move(theme) }
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message { "boot", {} } }; })
+                  .on_update(
+                      [](state &current, const message &value) -> kei::result<>
+                      {
+                          if (value.action.empty())
+                              current.text = value.text;
+                          else if (value.action == "notes")
+                              current.submits++;
+                          return {};
+                      })
+                  .on_view(
+                      [&observed](const state &current)
+                      {
+                          observed = current;
+                          return column()[text_area(current.text, "notes", "Notes")];
+                      })
+                  .on_event(
+                      [](const sleet::event &input) -> std::optional<message>
+                      {
+                          if (input.type == sleet::event::kind::text_edit and input.action == "notes")
+                              return message { {}, input.text };
+                          if (input.type == sleet::event::kind::submit and input.action == "notes")
+                              return message { "notes", {} };
+                          return std::nullopt;
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1:  push_key(SDLK_TAB); break;
+                          // Focus places the caret at the end, so move to the
+                          // document start before exercising line navigation.
+                          case 2:  push_key(SDLK_HOME, SDL_KMOD_CTRL); break;
+                          case 3:  push_key(SDLK_END); break;
+                          case 4:  push_text("X"); break;
+                          case 5:  push_key(SDLK_DOWN); break;
+                          case 6:  push_key(SDLK_HOME); break;
+                          case 7:  push_text("Y"); break;
+                          case 8:  push_key(SDLK_UP); break;
+                          case 9:  push_text("Z"); break;
+                          case 10: push_key(SDLK_RETURN, SDL_KMOD_CTRL); break;
+                          case 11: push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.submits, 1));
+
+        const auto newline = observed.text.find('\n');
+        expect(newline != std::string::npos);
+        if (newline == std::string::npos) return;
+
+        expect(observed.text.find('Z') < newline);
+        expect(eq(std::string_view { observed.text }.substr(newline + 1),
+                  std::string_view { "Ycd" }));
+    };
+
+    "Home stays on the empty line after a trailing newline"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+            std::string text = "ab\n";
+        };
+
+        struct message
+        {
+            std::string text;
+        };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto result
+            = app { "sleet-text-area-trailing-test", 320, 240, std::move(theme) }
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message { "boot" } }; })
+                  .on_update(
+                      [](state &current, const message &value) -> kei::result<>
+                      {
+                          if (value.text != "boot") current.text = value.text;
+                          return {};
+                      })
+                  .on_view(
+                      [&observed](const state &current)
+                      {
+                          observed = current;
+                          return column()[text_area(current.text, "notes")];
+                      })
+                  .on_event(
+                      [](const sleet::event &input) -> std::optional<message>
+                      {
+                          if (input.type == sleet::event::kind::text_edit
+                              and input.action == "notes")
+                              return message { input.text };
+                          return std::nullopt;
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1:  push_key(SDLK_TAB); break;
+                          case 2:  push_key(SDLK_HOME); break;
+                          case 3:  push_text("X"); break;
+                          case 4:  push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.text, std::string { "ab\nX" }));
+    };
+
     "a hovered widget without a tooltip does not wake the idle loop"_test = []
     {
         using namespace sleet::widget;

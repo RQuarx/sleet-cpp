@@ -50,7 +50,8 @@ overrides either per widget.
 
 Focused widgets draw a two-pixel focus border. Text inputs render their
 placeholder, caret, selection highlight, IME preedit text, and horizontal
-scroll. Checkbox and radio indicators, combo headers and popup surfaces, and
+scroll. Text areas wrap lines, scroll vertically to keep the caret visible, and
+draw the caret and selection per visual line. Checkbox and radio indicators, combo headers and popup surfaces, and
 progress fills resolve their colors from the control kind and semantic tone.
 Sliders are drawn from their control value as a rounded track, an accent fill,
 and a centered thumb; focus rings the thumb instead of the whole row, and

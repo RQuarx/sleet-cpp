@@ -50,6 +50,24 @@ const boost::ut::suite widget_tests = []
         expect(eq(data.action, std::string { "name" }));
         expect(data.size.x.is_fill());
         expect(eq(data.size.y.get_fixed_size(), 36.F));
+        expect(!data.multiline);
+    };
+
+    "text areas enable multiline editing with a taller default"_test = []
+    {
+        auto        widget = text_area("hello\nworld", "notes", "Write...");
+        const auto &data   = widget.data_view();
+
+        expect(data.is_text());
+        expect(data.control == control_kind::text_input);
+        expect(data.focusable);
+        expect(data.multiline);
+        expect(eq(data.text, std::string { "hello\nworld" }));
+        expect(eq(data.placeholder, std::string { "Write..." }));
+        expect(eq(data.action, std::string { "notes" }));
+        expect(data.size.x.is_fill());
+        expect(eq(data.size.y.get_fixed_size(), 120.F));
+        expect(data.wrap == text_wrap_mode::wrap);
     };
 
     "floating boxes anchor to parent edges and configure stacking"_test = []

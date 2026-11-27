@@ -5,7 +5,7 @@ Sleet is a small C++23 UI framework modeled on the
 values, layout is a pure calculation, and rendering is a thin layer over SDL3.
 
 There are four primitive nodes — `box`, `row`, `column`, and `label` — and the
-framework ships with buttons, text inputs, combo boxes, checkboxes, toggles,
+framework ships with buttons, text inputs, text areas, combo boxes, checkboxes, toggles,
 radio buttons, sliders, progress bars, separators, spacers, and badges. All text
 is UTF-8, line breaking follows Unicode rules, and the application runtime owns
 the window, renderer, and event loop.
