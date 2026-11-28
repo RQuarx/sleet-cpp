@@ -69,10 +69,10 @@ overload allows custom content such as a row of labels and badges.
 
 ## Lists, tables, and trees
 
-Lists and tables are scrollable, focus-grouped surfaces. The application owns
-the data and the selected value; the runtime owns focus, scrolling, and
-keyboard navigation. Rebuild the rows from state each frame and mark the
-selected row with `selected(true)`:
+Lists and tables are scrollable, focus-grouped surfaces. By default the
+application owns the data and the selected value; the runtime owns focus,
+scrolling, and keyboard navigation. Rebuild the rows from state each frame and
+mark the selected row with `selected(true)`:
 
 ```cpp
 auto rows = list_view() | width(260.F) | height(220.F);
@@ -133,6 +133,32 @@ Row ids are derived from their actions, so reordering or filtering rows keeps
 focus and scroll state attached to the right item. When several rows share an
 action, give each one an explicit `key(...)`.
 
+### Multi-select
+
+Add `multi_select()` to a list, table, or tree container to let the runtime own
+a selection set. The container needs a stable `id` so the runtime can keep the
+set across view rebuilds:
+
+```cpp
+auto files = table_view() | id("files") | multi_select();
+
+// Seed the initial selection by marking rows.
+auto row = table_row(file.action, contains(current.selected, file.action));
+```
+
+A plain click replaces the selection, Shift-click selects the range from the
+anchor, and Ctrl/Cmd-click toggles one row. Ctrl+Space toggles the focused row;
+Enter and Space still activate it. Row keys are their actions, falling back to
+their text. The runtime paints `selected` on matching rows and reports changes
+as `selection_changed` with the full set in `event::selection`. Read or replace
+the set from `on_update` with `selected_rows(id)`, `set_selected_rows(id, rows)`,
+and `clear_selection(id)`.
+
+Because the runtime owns the set, mouse releases on multi-select rows do not
+emit their row action. Use the selection event to react to row clicks; the row
+action is still available for keyboard activation and for identifying the
+clicked row in the event.
+
 ## Modifiers
 
 Modifiers are applied with `|`:
@@ -161,6 +187,7 @@ box()[label("Hello")]
 | `clip(bool)`, `clip_children(bool)` | Clip descendants to this node's bounds |
 | `scrollable(bool)` | Wheel-scroll a clipped viewport |
 | `scrollbar(bool)` | Show or hide the proportional scrollbar on a scrollable node |
+| `multi_select(bool)` | Let the runtime own a list/table/tree selection set |
 | `ensure_visible(bool)` | Scroll ancestors to reveal the node when it gains focus |
 | `disabled(bool)` | Remove a subtree from focus and input; disabled widgets are not pointer targets |
 | `text_size`, `text_weight`, `text_role`, `text_color`, `text_decoration` | Text styling |

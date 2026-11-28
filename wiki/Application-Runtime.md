@@ -16,16 +16,26 @@ required; the other callbacks are optional.
 ## Events
 
 Framework events carry the hit-tested `target` widget id, the nearest `on_click`
-`action`, logical pointer coordinates, scroll deltas, key codes, and text input.
-A left-button release reports an `action` only when the press began on the same
-action widget, so dragging off a button cancels the click. Only the primary
-(left) button changes the pressed visual state. The `button` field is still
-available for user mappings.
+`action`, logical pointer coordinates, scroll deltas, key codes, text input, and
+the current `modifiers` mask. A left-button release reports an `action` only when
+the press began on the same action widget, so dragging off a button cancels the
+click. Only the primary (left) button changes the pressed visual state. The
+`button` field is still available for user mappings, and middle-button presses
+also pan the nearest scrollable viewport while held.
 
 Event kinds: `quit`, `resize`, `mouse_move`, `mouse_down`, `mouse_up`, `scroll`,
 `key_down`, `key_up`, `text_input`, and the control kinds described in
 [[Controls]]: `text_edit`, `submit`, `selection_changed`, `slider_changed`, and
 `activate`.
+
+Multi-select containers report `selection_changed` with the clicked row in
+`target`, its action in `action`, and the full selected set in `selection`. Row
+keys are their actions, or their text when no action is set. The runtime owns the
+selection set: a plain click replaces it, Shift-click selects a range from the
+anchor, Ctrl/Cmd-click toggles one row, and Ctrl+Space toggles the focused row.
+`selected_rows(id)`, `set_selected_rows(id, rows)`, and `clear_selection(id)`
+read or replace the set from an update callback. See [[Widgets]] for enabling
+multi-select on a list, table, or tree.
 
 ```cpp
 .on_event([](const sleet::event &input) -> std::optional<message>
@@ -105,13 +115,20 @@ sliders, and combo boxes keep their own arrow-key behavior.
 
 Wheel events scroll the nearest `scrollable()` ancestor by 48 logical pixels per
 step and are also dispatched as `scroll` events with logical coordinates and
-deltas. The runtime moves 40% of the step immediately and eases the remainder,
-so input feels responsive without jumping. Offsets are clamped to the measured
-content after each layout and applied by translating the subtree, so hit testing
-and painting use the same coordinates. Nested scroll containers are resolved
-bottom-up. When focus moves, scrollable ancestors reveal the focused widget
-unless it opts out with `ensure_visible(false)`. `set_reduced_motion()` snaps
-scrolling and control transitions to their targets.
+deltas. Native horizontal wheel deltas work directly; Shift+wheel maps a
+vertical wheel to the horizontal axis for mice without a horizontal wheel. The
+runtime moves 40% of the step immediately and eases the remainder, so input feels
+responsive without jumping. Offsets are clamped to the measured content after
+each layout and applied by translating the subtree, so hit testing and painting
+use the same coordinates. Nested scroll containers are resolved bottom-up.
+
+Visible scrollbars are interactive. Dragging a thumb scrolls one-to-one with the
+pointer, clicking a track jumps the thumb to that position and continues as a
+drag, and middle-button dragging pans both axes. The runtime and renderer share
+`widget::scrollbar_layout_for`, so the clickable geometry always matches what is
+painted. When focus moves, scrollable ancestors reveal the focused widget unless
+it opts out with `ensure_visible(false)`. `set_reduced_motion()` snaps scrolling
+and control transitions to their targets.
 
 Text input supports platform IME composition. `SDL_EVENT_TEXT_EDITING` updates
 the preedit shown in the focused field, and `SDL_EVENT_TEXT_INPUT` commits the

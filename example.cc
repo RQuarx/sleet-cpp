@@ -3,8 +3,11 @@
 #include <exception>
 #include <format>
 #include <optional>
+#include <ranges>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include <SDL3/SDL_mouse.h>
 #include <sleet/sleet.hh>
@@ -18,21 +21,21 @@ namespace
 
     struct state
     {
-        int         count = 0;
-        std::string name;
-        std::string notes;
-        std::string color         = "Blue";
-        std::string density       = "Comfortable";
-        bool        show_details  = true;
-        bool        notifications = true;
-        bool        autosave      = false;
-        float       volume        = 0.4F;
-        std::string selected_file = "main.cpp";
-        std::string selected_tree = "src";
-        bool        src_open      = true;
-        std::string menu_choice;
-        bool        menu_open   = false;
-        bool        dialog_open = false;
+        int                      count = 0;
+        std::string              name;
+        std::string              notes;
+        std::string              color         = "Blue";
+        std::string              density       = "Comfortable";
+        bool                     show_details  = true;
+        bool                     notifications = true;
+        bool                     autosave      = false;
+        float                    volume        = 0.4F;
+        std::vector<std::string> selected_files { "file_main.cpp" };
+        std::vector<std::string> selected_tree_rows { "tree_src" };
+        bool                     src_open = true;
+        std::string              menu_choice;
+        bool                     menu_open   = false;
+        bool                     dialog_open = false;
     };
 
 
@@ -55,8 +58,8 @@ namespace
             toggle_notifications,
             toggle_autosave,
             volume_changed,
-            file_pick,
-            tree_pick,
+            file_selection,
+            tree_selection,
             tree_toggle,
             menu_toggle,
             menu_close,
@@ -69,17 +72,20 @@ namespace
         };
 
 
-        message(kind        message_kind  = kind::none,
-                std::string message_text  = {},
-                float       message_value = 0.F)
-            : type { message_kind }, text { std::move(message_text) }, value { message_value }
+        message(kind                     message_kind      = kind::none,
+                std::string              message_text      = {},
+                float                    message_value     = 0.F,
+                std::vector<std::string> message_selection = {})
+            : type { message_kind }, text { std::move(message_text) }, value { message_value },
+              selection { std::move(message_selection) }
         {
         }
 
 
-        kind        type = kind::none;
-        std::string text;
-        float       value = 0.F;
+        kind                     type = kind::none;
+        std::string              text;
+        float                    value = 0.F;
+        std::vector<std::string> selection;
     };
 
 
@@ -89,6 +95,32 @@ namespace
     [[nodiscard]]
     auto muted(std::string text) -> label_node
     { return label(std::move(text)) | text_role(font_role::caption) | text_color(0x98A2B0_rgb); }
+
+
+    [[nodiscard]]
+    auto contains(const std::vector<std::string> &values, std::string_view key) -> bool
+    { return std::ranges::find(values, key) != values.end(); }
+
+
+    [[nodiscard]]
+    auto selection_label(const std::vector<std::string> &keys) -> std::string
+    {
+        if (keys.empty()) return "none";
+
+        auto result = std::string {};
+
+        for (const auto &key : keys)
+        {
+            auto label = key;
+            if (const auto split = label.find('_'); split != std::string::npos)
+                label.erase(0, split + 1);
+
+            if (!result.empty()) result += ", ";
+            result += label;
+        }
+
+        return result;
+    }
 
 
     [[nodiscard]]
@@ -129,10 +161,6 @@ namespace
         if (action == "details") return message { message::kind::toggle_details };
         if (action == "notifications") return message { message::kind::toggle_notifications };
         if (action == "autosave") return message { message::kind::toggle_autosave };
-        if (action.starts_with("file_"))
-            return message { message::kind::file_pick, action.substr(5) };
-        if (action.starts_with("tree_"))
-            return message { message::kind::tree_pick, action.substr(5) };
         if (action == "toggle_src") return message { message::kind::tree_toggle };
         if (action == "menu_toggle") return message { message::kind::menu_toggle };
         if (action == "menu_close") return message { message::kind::menu_close };
@@ -166,7 +194,7 @@ namespace
                                          | text_role(font_role::heading) | text_color(0xF3F5F8_rgb),
                                      muted("Every built-in widget in one interactive window.")]
                                 | gap(2.F),
-                            spacer(), badge("v1.7.1")]
+                            spacer(), badge("v1.8.0")]
                     | gap(12.F) | width(sizing::fill()) | valign(align::center);
 
 
@@ -215,14 +243,16 @@ namespace
             | gap(8.F));
 
 
-        auto file_table = table_view() | height(150.F) | width(sizing::grow()) | flex(1.F);
+        auto file_table = table_view() | id("files") | multi_select() | height(150.F)
+                        | width(sizing::grow()) | flex(1.F);
         file_table      = std::move(file_table)[table_header()[table_header_cell("Name", 2.F),
                                                                table_header_cell("Size", 1.F)]];
 
         const auto add_file = [&](std::string name, std::string size)
         {
-            auto row = table_row(std::format("file_{}", name), current.selected_file == name);
-            row      = std::move(
+            const auto action = std::format("file_{}", name);
+            auto       row    = table_row(action, contains(current.selected_files, action));
+            row               = std::move(
                 row)[table_cell(std::move(name), 2.F), table_cell(std::move(size), 1.F)];
             file_table = std::move(file_table)[std::move(row)];
         };
@@ -236,40 +266,55 @@ namespace
         add_file("node.cc", "18 KB");
         add_file("README.md", "9 KB");
 
-        auto project_tree = tree_view() | height(150.F) | width(sizing::grow()) | flex(1.F);
-        project_tree      = std::move(project_tree)[tree_item("src", "tree_src",
-                                                              { .depth         = 0,
-                                                                .expanded      = current.src_open,
-                                                                .has_children  = true,
-                                                                .toggle_action = "toggle_src" })
-                                                    | selected(current.selected_tree == "src")];
+        auto project_tree = tree_view() | id("project-tree") | multi_select() | height(150.F)
+                          | width(sizing::grow()) | flex(1.F);
+        project_tree
+            = std::move(project_tree)[tree_item("src", "tree_src",
+                                                { .depth         = 0,
+                                                  .expanded      = current.src_open,
+                                                  .has_children  = true,
+                                                  .toggle_action = "toggle_src" })
+                                      | selected(contains(current.selected_tree_rows, "tree_src"))];
 
         if (current.src_open)
             project_tree = std::move(project_tree)
                 [tree_item(
                      "main.cpp", "tree_main.cpp",
                      { .depth = 1, .expanded = false, .has_children = false, .toggle_action = {} })
-                     | selected(current.selected_tree == "main.cpp"),
+                     | selected(contains(current.selected_tree_rows, "tree_main.cpp")),
                  tree_item(
                      "widgets.cc", "tree_widgets.cc",
                      { .depth = 1, .expanded = false, .has_children = false, .toggle_action = {} })
-                     | selected(current.selected_tree == "widgets.cc"),
+                     | selected(contains(current.selected_tree_rows, "tree_widgets.cc")),
                  tree_item(
                      "application.cc", "tree_application.cc",
                      { .depth = 1, .expanded = false, .has_children = false, .toggle_action = {} })
-                     | selected(current.selected_tree == "application.cc")];
+                     | selected(contains(current.selected_tree_rows, "tree_application.cc"))];
 
-        project_tree = std::move(project_tree)[tree_item("README.md", "tree_README.md",
-                                                         { .depth         = 0,
-                                                           .expanded      = false,
-                                                           .has_children  = false,
-                                                           .toggle_action = {} })
-                                               | selected(current.selected_tree == "README.md")];
+        project_tree = std::move(project_tree)
+            [tree_item(
+                 "README.md", "tree_README.md",
+                 { .depth = 0, .expanded = false, .has_children = false, .toggle_action = {} })
+             | selected(contains(current.selected_tree_rows, "tree_README.md"))];
+
+        auto strip = row() | gap(8.F) | height(40.F) | valign(align::center);
+        for (auto index = 0; index < 12; ++index)
+            strip = std::move(strip)[badge(std::format("Chip {:02}", index)) | width(90.F)
+                                     | align_self(align::center)];
+
+        auto horizontal_strip = column()[std::move(strip)] | id("horizontal-strip")
+                              | width(sizing::fill()) | height(56.F) | clip() | scrollable()
+                              | background_of(tone::field) | border_of(tone::border) | radius(4.F);
 
         auto catalog_card
             = card(column()[section_title("Lists, tables, and trees"),
                             row()[std::move(file_table), std::move(project_tree)] | gap(12.F)
                                 | width(sizing::fill()),
+                            muted("Shift-click selects a range, Ctrl-click toggles a row, and "
+                                  "Ctrl+Space toggles the focused row."),
+                            muted("Drag either scrollbar, middle-drag to pan, or use Shift+wheel "
+                                  "for horizontal scrolling."),
+                            horizontal_strip,
                             muted("Arrow keys navigate rows. Enter or a click selects. Left/Right "
                                   "collapse and expand tree branches.")]
                    | gap(8.F));
@@ -295,8 +340,8 @@ namespace
                          | gap(8.F) | valign(align::center),
                      stat_line("Name", current.name.empty() ? "(empty)" : current.name),
                      stat_line("Color", current.color), stat_line("Density", current.density),
-                     stat_line("File", current.selected_file),
-                     stat_line("Tree", current.selected_tree),
+                     stat_line("Files", selection_label(current.selected_files)),
+                     stat_line("Tree", selection_label(current.selected_tree_rows)),
                      stat_line("Count", std::format("{}", current.count)), separator(),
                      label(std::format("Volume {:.0f}%", current.volume * 100.F)) | text_size(20.F)
                          | text_color(0xE6E8EB_rgb)]
@@ -347,17 +392,18 @@ namespace
             | gap(10.F));
 
 
-        auto left  = column()[std::move(input_card), std::move(selection_card),
-                              std::move(catalog_card), std::move(styles_card)]
-                   | width(sizing::grow()) | flex(1.F) | gap(14.F);
-        auto right = column()[std::move(buttons_card), std::move(slider_card),
-                              std::move(notes_card), std::move(overlay_card),
-                              std::move(status_card)]
-                   | width(sizing::grow()) | flex(1.F) | gap(14.F);
+        auto left = column()[std::move(input_card), std::move(selection_card),
+                             std::move(catalog_card), std::move(styles_card)]
+                  | width(sizing::grow()) | flex(1.F) | gap(14.F);
+        auto right
+            = column()[std::move(buttons_card), std::move(slider_card), std::move(notes_card),
+                       std::move(overlay_card), std::move(status_card)]
+            | width(sizing::grow()) | flex(1.F) | gap(14.F);
 
 
-        auto footer = row()[muted("Tab moves focus. Arrow keys move within a focus group. "
-                                  "Ctrl+K fires a global shortcut."),
+        auto footer = row()[muted("Tab moves focus. Shift-click ranges and Ctrl-click toggles. "
+                                  "Drag scrollbars or middle-drag to pan. Ctrl+K fires a "
+                                  "global shortcut."),
                             spacer(), badge("interactive")]
                     | gap(12.F) | width(sizing::fill()) | valign(align::center);
 
@@ -400,8 +446,7 @@ auto main() -> int
     {
         auto instance = app { "Sleet widget gallery", 1040, 1000 };
 
-        instance
-            .on_shortcut("Ctrl+K", "shortcut_demo")
+        instance.on_shortcut("Ctrl+K", "shortcut_demo")
             .on_boot([]() -> kei::result<std::pair<state, message>>
                      { return std::pair { state {}, message {} }; })
             .on_update(
@@ -409,14 +454,18 @@ auto main() -> int
                 {
                     switch (value.type)
                     {
-                    case message::kind::none:            break;
-                    case message::kind::increment:       current.count++; break;
-                    case message::kind::decrement:       current.count--; break;
-                    case message::kind::reset:           current = state {}; break;
-                    case message::kind::clear:           current.name.clear(); break;
-                    case message::kind::boost:           current.count += 10; break;
-                    case message::kind::name_changed:    current.name = value.text; break;
-                    case message::kind::notes_changed:   current.notes = value.text; break;
+                    case message::kind::none:      break;
+                    case message::kind::increment: current.count++; break;
+                    case message::kind::decrement: current.count--; break;
+                    case message::kind::reset:
+                        current = state {};
+                        instance.set_selected_rows("files", current.selected_files);
+                        instance.set_selected_rows("project-tree", current.selected_tree_rows);
+                        break;
+                    case message::kind::clear:         current.name.clear(); break;
+                    case message::kind::boost:         current.count += 10; break;
+                    case message::kind::name_changed:  current.name = value.text; break;
+                    case message::kind::notes_changed: current.notes = value.text; break;
                     case message::kind::notes_submit:
                         instance.notify("Notes submitted", 2.5F);
                         break;
@@ -432,9 +481,13 @@ auto main() -> int
                         current.autosave = !current.autosave;
                         break;
                     case message::kind::volume_changed: current.volume = value.value; break;
-                    case message::kind::file_pick:      current.selected_file = value.text; break;
-                    case message::kind::tree_pick:      current.selected_tree = value.text; break;
-                    case message::kind::tree_toggle:    current.src_open = !current.src_open; break;
+                    case message::kind::file_selection:
+                        current.selected_files = value.selection;
+                        break;
+                    case message::kind::tree_selection:
+                        current.selected_tree_rows = value.selection;
+                        break;
+                    case message::kind::tree_toggle: current.src_open = !current.src_open; break;
                     case message::kind::menu_toggle: current.menu_open = !current.menu_open; break;
                     case message::kind::menu_close:  current.menu_open = false; break;
                     case message::kind::menu_pick:
@@ -491,13 +544,20 @@ auto main() -> int
                         return std::nullopt;
 
                     case event::kind::submit:
-                        if (input.action == "notes")
-                            return message { message::kind::notes_submit };
+                        if (input.action == "notes") return message { message::kind::notes_submit };
                         return std::nullopt;
 
                     case event::kind::selection_changed:
                         if (input.action == "color")
                             return message { message::kind::color_changed, input.text };
+                        if (input.action.starts_with("file_"))
+                            return message {
+                                message::kind::file_selection, {}, 0.F, input.selection
+                            };
+                        if (input.action.starts_with("tree_"))
+                            return message {
+                                message::kind::tree_selection, {}, 0.F, input.selection
+                            };
                         return std::nullopt;
 
                     case event::kind::slider_changed:

@@ -38,6 +38,7 @@
 #include "sleet/widget/control.hh"
 #include "sleet/widget/layout.hh"
 #include "sleet/widget/node.hh"
+#include "sleet/widget/scroll.hh"
 #include "sleet/widget/theme.hh"
 
 
@@ -86,6 +87,11 @@ namespace sleet
         std::uint16_t modifiers = 0;
         bool          repeat    = false;
         std::string   text;
+
+        /// The selected row keys reported by a multi-select list, table, or
+        /// tree. Row keys are their actions, or their text when no action is
+        /// set. The keys are ordered by their visible row order.
+        std::vector<std::string> selection;
 
         /// A normalized control value in the range zero to one. Sliders use it.
         float value = 0.F;
@@ -524,6 +530,7 @@ namespace sleet
             // makes text blurry).
             m_text_cursor    = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_TEXT);
             m_pointer_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER);
+            m_move_cursor    = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_MOVE);
         }
 
         ~application()
@@ -532,6 +539,7 @@ namespace sleet
             if (m_current_cursor != nullptr) SDL_SetCursor(SDL_GetDefaultCursor());
             if (m_text_cursor != nullptr) SDL_DestroyCursor(m_text_cursor);
             if (m_pointer_cursor != nullptr) SDL_DestroyCursor(m_pointer_cursor);
+            if (m_move_cursor != nullptr) SDL_DestroyCursor(m_move_cursor);
         }
 
         application(const application &)            = delete;
@@ -614,8 +622,7 @@ namespace sleet
         {
             if (chord.key == 0)
             {
-                if (m_shortcut_error.empty())
-                    m_shortcut_error = "sleet: a shortcut needs a key.";
+                if (m_shortcut_error.empty()) m_shortcut_error = "sleet: a shortcut needs a key.";
                 return *this;
             }
 
@@ -633,9 +640,7 @@ namespace sleet
                          std::uint16_t modifiers,
                          std::string   action,
                          bool          repeat = false) -> application &
-        {
-            return on_shortcut(key_chord { key, modifiers, repeat }, std::move(action));
-        }
+        { return on_shortcut(key_chord { key, modifiers, repeat }, std::move(action)); }
 
         /// Registers a keyboard shortcut from text such as \c "Ctrl+Shift+S",
         /// \c "Cmd+Enter", or \c "F5".
@@ -650,8 +655,7 @@ namespace sleet
             if (!parsed)
             {
                 if (m_shortcut_error.empty())
-                    m_shortcut_error
-                        = std::format("sleet: invalid shortcut \"{}\".", chord);
+                    m_shortcut_error = std::format("sleet: invalid shortcut \"{}\".", chord);
                 return *this;
             }
 
@@ -728,6 +732,57 @@ namespace sleet
         }
 
 
+        /// Returns the selected row keys of a multi-select container, ordered
+        /// by their visible row order. Row keys are their actions, or their
+        /// text when no action is set.
+        [[nodiscard]]
+        auto selected_rows(const widget::widget_id &container) const -> std::vector<std::string>
+        {
+            const auto it = m_selections.find(container);
+            return it == m_selections.end() ? std::vector<std::string> {} : it->second.rows;
+        }
+
+
+        /// Replaces the selection of a multi-select container. The runtime
+        /// paints matching rows on the next frame. Unknown keys are kept but
+        /// have no effect until a matching row appears.
+        void set_selected_rows(const widget::widget_id &container, std::vector<std::string> rows)
+        {
+            auto &state       = m_selections[container];
+            state.initialized = true;
+            state.rows        = std::move(rows);
+            state.anchor = state.rows.empty() ? std::nullopt
+                                              : std::optional<std::string> { state.rows.front() };
+            m_selection_requested = true;
+        }
+
+
+        /// Clears the runtime selection of one multi-select container.
+        void clear_selection(const widget::widget_id &container)
+        {
+            auto &state       = m_selections[container];
+            state.initialized = true;
+            state.rows.clear();
+            state.anchor.reset();
+            m_selection_requested = true;
+        }
+
+
+        /// Clears every runtime-managed multi-selection.
+        void clear_selections()
+        {
+            for (auto &[container, state] : m_selections)
+            {
+                (void)container;
+                state.initialized = true;
+                state.rows.clear();
+                state.anchor.reset();
+            }
+
+            m_selection_requested = true;
+        }
+
+
         auto run() -> int
         {
             if (!m_shortcut_error.empty())
@@ -759,6 +814,7 @@ namespace sleet
 
         SDL_Cursor *m_text_cursor    = nullptr;
         SDL_Cursor *m_pointer_cursor = nullptr;
+        SDL_Cursor *m_move_cursor    = nullptr;
         SDL_Cursor *m_current_cursor = nullptr;
 
         /// Whether presentation blocks on the display refresh. Without it the
@@ -811,6 +867,21 @@ namespace sleet
 
         std::deque<toast_entry> m_toasts;
 
+        /// Runtime-owned selection for multi-select containers. Keys are row
+        /// actions, or row text when a row has no action.
+        struct multi_selection_state
+        {
+            bool                       initialized = false;
+            std::optional<std::string> anchor;
+            std::vector<std::string>   rows;
+        };
+
+        std::unordered_map<widget::widget_id, multi_selection_state> m_selections;
+
+        /// Set when a public selection setter changes state outside the view
+        /// rebuild path.
+        bool m_selection_requested = false;
+
         int           m_width  = 800;
         int           m_height = 600;
         widget::theme m_theme;
@@ -849,6 +920,26 @@ namespace sleet
             std::optional<widget::widget_id>     selecting;
             std::optional<widget::widget_id>     dragging;
 
+            /// An in-progress scrollbar thumb drag.
+            struct scrollbar_drag_state
+            {
+                widget::widget_id scroller;
+                bool              horizontal = false;
+                float             grab       = 0.F;
+            };
+
+            std::optional<scrollbar_drag_state> scrollbar_drag;
+
+            /// An in-progress middle-button pan.
+            struct pan_state
+            {
+                widget::widget_id scroller;
+                math::vec2        origin;
+                math::vec2        offset;
+            };
+
+            std::optional<pan_state> panning;
+
             /// The last focused member of each focus group, keyed by the group
             /// node's id. Tab returns to that member when it re-enters.
             std::unordered_map<widget::widget_id, widget::widget_id> focus_groups;
@@ -881,7 +972,7 @@ namespace sleet
             /// between visual lines of a multiline field.
             std::unordered_map<widget::widget_id, float> text_caret_goals;
 
-            std::unordered_set<widget::widget_id>                         open_combos;
+            std::unordered_set<widget::widget_id> open_combos;
 
             /// Wheel offsets, clamped to the measured content after layout.
             std::unordered_map<widget::widget_id, math::vec2> scrolls;
@@ -1093,14 +1184,26 @@ namespace sleet
         }
 
 
-        void update_cursor(const widget::node_data *hit)
+        struct scrollbar_hit
+        {
+            const widget::node_data *scroller   = nullptr;
+            bool                     horizontal = false;
+            bool                     on_thumb   = false;
+        };
+
+
+        void update_cursor(const session &current, const widget::node_data *hit, math::vec2 point)
         {
             auto *next = static_cast<SDL_Cursor *>(nullptr);
 
-            if (const auto *control = _impl::control_target(hit);
-                control != nullptr and control->control == widget::control_kind::text_input)
+            if (current.panning or current.scrollbar_drag)
+                next = m_move_cursor;
+            else if (scrollbar_at(current, hit, point))
+                next = m_move_cursor;
+            else if (const auto *control = _impl::control_target(hit);
+                     control != nullptr and control->control == widget::control_kind::text_input)
                 next = m_text_cursor;
-            else if (_impl::interactive_target(hit) != nullptr)
+            else if (visual_control_target(hit) != nullptr)
                 next = m_pointer_cursor;
 
             if (next == m_current_cursor) return;
@@ -1128,11 +1231,25 @@ namespace sleet
 
         // Theme hover and press colors belong to interactive widgets. Plain
         // widgets still report a hit target, but hovering them should not
-        // change their color.
+        // change their color. List and tree surfaces are containers rather
+        // than controls: highlighting them while the pointer crosses the gaps
+        // between rows makes the whole panel flicker.
+        [[nodiscard]]
+        static auto visual_control_target(const widget::node_data *hit) -> const widget::node_data *
+        {
+            const auto *target = _impl::interactive_target(hit);
+            if (target == nullptr) return nullptr;
+            if (target->control == widget::control_kind::list_view
+                or target->control == widget::control_kind::tree_view)
+                return nullptr;
+            return target;
+        }
+
+
         [[nodiscard]]
         static auto visual_target(const widget::node_data *hit) -> std::optional<widget::widget_id>
         {
-            if (const auto *target = _impl::interactive_target(hit); target != nullptr)
+            if (const auto *target = visual_control_target(hit); target != nullptr)
                 return target->id;
             return std::nullopt;
         }
@@ -1191,7 +1308,8 @@ namespace sleet
         static void clear_pointer_state(session &current)
         {
             if (!current.hovered and !current.pressed and !current.press_active
-                and !current.selecting and !current.dragging and !current.pointer_target)
+                and !current.selecting and !current.dragging and !current.pointer_target
+                and !current.scrollbar_drag and !current.panning)
                 return;
 
             current.hovered.reset();
@@ -1199,6 +1317,8 @@ namespace sleet
             current.pressed.reset();
             current.selecting.reset();
             current.dragging.reset();
+            current.scrollbar_drag.reset();
+            current.panning.reset();
             current.press_active = false;
             current.tooltip_hover.reset();
             hide_tooltip(current);
@@ -1325,8 +1445,7 @@ namespace sleet
                 auto       next      = Sint32 { 16 };
 
                 if (remaining > toast_fade_out and toast.age >= toast_fade_in)
-                    next = static_cast<Sint32>(
-                        std::ceil((remaining - toast_fade_out) * 1000.F));
+                    next = static_cast<Sint32>(std::ceil((remaining - toast_fade_out) * 1000.F));
 
                 timeout = timeout < 0 ? next : std::min(timeout, next);
             }
@@ -1367,14 +1486,13 @@ namespace sleet
         }
 
 
-        using focus_group_map
-            = std::unordered_map<widget::widget_id, widget::widget_id>;
+        using focus_group_map = std::unordered_map<widget::widget_id, widget::widget_id>;
 
 
         /// Adds one representative for each nested focus group and every
         /// ordinary focusable descendant.
-        static void gather_group_members(const widget::node_data          &node,
-                                         const focus_group_map            &groups,
+        static void gather_group_members(const widget::node_data                &node,
+                                         const focus_group_map                  &groups,
                                          std::vector<const widget::node_data *> &result)
         {
             for (const auto &child : node.children)
@@ -1398,13 +1516,11 @@ namespace sleet
         /// descendant when the remembered member is gone.
         [[nodiscard]]
         static auto group_representative(const widget::node_data &group,
-                                         const focus_group_map   &groups)
-            -> const widget::node_data *
+                                         const focus_group_map &groups) -> const widget::node_data *
         {
             auto members = std::vector<const widget::node_data *> {};
             gather_group_members(group, groups, members);
-            if (members.empty())
-                return group.focusable ? &group : nullptr;
+            if (members.empty()) return group.focusable ? &group : nullptr;
 
             if (const auto it = groups.find(group.id); it != groups.end())
                 for (const auto *member : members)
@@ -1428,8 +1544,7 @@ namespace sleet
             }
 
             if (node.focusable) result.push_back(&node);
-            for (const auto &child : node.children)
-                collect_focusable(child, groups, result);
+            for (const auto &child : node.children) collect_focusable(child, groups, result);
         }
 
 
@@ -1437,8 +1552,7 @@ namespace sleet
         /// node focuses itself; a container focuses its first focusable
         /// descendant or its focus group's remembered member.
         [[nodiscard]]
-        static auto autofocus_target(const widget::node_data &node,
-                                     const focus_group_map   &groups)
+        static auto autofocus_target(const widget::node_data &node, const focus_group_map &groups)
             -> const widget::node_data *
         {
             if (!node.visible or node.disabled) return nullptr;
@@ -1447,15 +1561,14 @@ namespace sleet
             if (node.focusable) return &node;
 
             for (const auto &child : node.children)
-                if (const auto *target = autofocus_target(child, groups))
-                    return target;
+                if (const auto *target = autofocus_target(child, groups)) return target;
 
             return nullptr;
         }
 
 
-        static void find_autofocus(const widget::node_data          &node,
-                                   const focus_group_map            &groups,
+        static void find_autofocus(const widget::node_data  &node,
+                                   const focus_group_map    &groups,
                                    const widget::node_data *&result)
         {
             if (result != nullptr or !node.visible or node.disabled) return;
@@ -1467,8 +1580,7 @@ namespace sleet
                     return;
                 }
 
-            for (const auto &child : node.children)
-                find_autofocus(child, groups, result);
+            for (const auto &child : node.children) find_autofocus(child, groups, result);
         }
 
 
@@ -1517,8 +1629,7 @@ namespace sleet
             // Remember the active member of every enclosing focus group so Tab
             // returns to it after focus leaves the group.
             for (auto *ancestor = node.parent; ancestor != nullptr; ancestor = ancestor->parent)
-                if (ancestor->focus_group)
-                    current.focus_groups[ancestor->id] = node.id;
+                if (ancestor->focus_group) current.focus_groups[ancestor->id] = node.id;
 
             current.focus_visible = keyboard;
             current.reveal_focus  = true;
@@ -1883,8 +1994,8 @@ namespace sleet
 
 
         [[nodiscard]]
-        static auto visual_line_at(const std::vector<text_line> &lines,
-                                   std::size_t                   offset) noexcept -> std::size_t
+        static auto visual_line_at(const std::vector<text_line> &lines, std::size_t offset) noexcept
+            -> std::size_t
         {
             for (std::size_t i = 0; i + 1 < lines.size(); i++)
                 if (offset < lines[i + 1].begin) return i;
@@ -1906,8 +2017,8 @@ namespace sleet
 
         [[nodiscard]]
         auto line_left(const widget::node_data &node,
-                       const text_line          &line,
-                       float                     available_width) const noexcept -> float
+                       const text_line         &line,
+                       float                    available_width) const noexcept -> float
         {
             return widget::text_alignment_offset(text_alignment_for(node),
                                                  available_width - line.width);
@@ -1982,17 +2093,16 @@ namespace sleet
         [[nodiscard]]
         auto caret_x_in_line(render_context          &context,
                              const widget::node_data &node,
-                             const text_line          &line,
+                             const text_line         &line,
                              std::size_t              offset) const -> float
         {
             const auto end = std::min(line.end, node.text.size());
             const auto at  = std::clamp(offset, line.begin, end);
             if (at <= line.begin) return 0.F;
 
-            auto width = context.measure_text(std::string_view { node.text }.substr(
-                                                  line.begin, at - line.begin),
-                                              node.font, std::nullopt,
-                                              widget::text_wrap_mode::no_wrap);
+            auto width = context.measure_text(
+                std::string_view { node.text }.substr(line.begin, at - line.begin), node.font,
+                std::nullopt, widget::text_wrap_mode::no_wrap);
             return width ? width->x : 0.F;
         }
 
@@ -2030,9 +2140,8 @@ namespace sleet
             const auto total      = *line_height * static_cast<float>(lines->size());
             if (relative_y >= total) return node.text.size();
 
-            const auto index      = static_cast<std::size_t>(std::clamp(
-                std::floor(relative_y / *line_height), 0.F,
-                static_cast<float>(lines->size() - 1)));
+            const auto index = static_cast<std::size_t>(std::clamp(
+                std::floor(relative_y / *line_height), 0.F, static_cast<float>(lines->size() - 1)));
 
             const auto &line   = (*lines)[index];
             const auto  left   = content.position.x + line_left(node, line, content.size.x);
@@ -2052,9 +2161,9 @@ namespace sleet
             if (content.size.x <= 0.F) return 0.F;
 
             const auto offset = widget::clamp_offset(node.text, caret);
-            auto width = context.measure_text(std::string_view { node.text }.substr(0, offset),
-                                              node.font, std::nullopt,
-                                              widget::text_wrap_mode::no_wrap);
+            auto       width
+                = context.measure_text(std::string_view { node.text }.substr(0, offset), node.font,
+                                       std::nullopt, widget::text_wrap_mode::no_wrap);
             if (!width) return 0.F;
 
             return std::max(0.F, width->x - content.size.x + 2.F);
@@ -2080,8 +2189,8 @@ namespace sleet
             auto line_height = context.line_height(node.font);
             if (!line_height or *line_height <= 0.F) return scroll;
 
-            const auto index = visual_line_at(*lines, caret);
-            const auto top   = *line_height * static_cast<float>(index);
+            const auto index  = visual_line_at(*lines, caret);
+            const auto top    = *line_height * static_cast<float>(index);
             const auto bottom = top + *line_height;
 
             if (top < scroll)
@@ -2090,7 +2199,7 @@ namespace sleet
                 scroll = bottom - content.size.y;
 
             const auto total = *line_height * static_cast<float>(lines->size());
-            scroll = std::clamp(scroll, 0.F, std::max(0.F, total - content.size.y));
+            scroll           = std::clamp(scroll, 0.F, std::max(0.F, total - content.size.y));
             return scroll;
         }
 
@@ -2240,8 +2349,8 @@ namespace sleet
                     if (bounds == nullptr) return true;
 
                     const auto content = bounds->inset(node.padding);
-                    auto lines = context.measure_lines(node.text, node.font, content.size.x,
-                                                       node.wrap);
+                    auto       lines
+                        = context.measure_lines(node.text, node.font, content.size.x, node.wrap);
                     if (!lines or lines->empty()) return true;
 
                     const auto index = visual_line_at(*lines, edit.caret);
@@ -2282,8 +2391,8 @@ namespace sleet
             case SDLK_HOME:
             case SDLK_END:
                 {
-                    auto target = native.key.key == SDLK_HOME ? std::size_t { 0 }
-                                                              : node.text.size();
+                    auto target
+                        = native.key.key == SDLK_HOME ? std::size_t { 0 } : node.text.size();
 
                     if (node.multiline and !command and bounds != nullptr)
                     {
@@ -2293,8 +2402,8 @@ namespace sleet
                         if (lines and !lines->empty())
                         {
                             const auto index = visual_line_at(*lines, edit.caret);
-                            target = native.key.key == SDLK_HOME ? (*lines)[index].begin
-                                                                 : (*lines)[index].end;
+                            target           = native.key.key == SDLK_HOME ? (*lines)[index].begin
+                                                                           : (*lines)[index].end;
                         }
                     }
 
@@ -2388,8 +2497,7 @@ namespace sleet
         auto handle_slider_key(session &current, widget::node_data &node, const SDL_Event &native)
             -> bool
         {
-            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
-                return false;
+            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0) return false;
 
             constexpr auto step  = 0.05F;
             auto           value = node.control_value;
@@ -2430,10 +2538,10 @@ namespace sleet
 
         /// Collects visible rows that belong directly to \p node. Nested list
         /// and tree surfaces own their own rows and are not descended into.
-        static void collect_list_rows(const widget::node_data                &node,
-                                      std::vector<const widget::node_data *> &rows)
+        template <typename Node>
+        static void collect_list_rows(Node &node, std::vector<Node *> &rows)
         {
-            for (const auto &child :
+            for (auto &child :
                  node.children
                      | std::views::filter([](const auto &value)
                                           { return value.visible and !value.disabled; }))
@@ -2462,6 +2570,200 @@ namespace sleet
                                                     { return candidate->id == row.id; });
             if (found == rows.end()) return std::nullopt;
             return static_cast<std::size_t>(found - rows.begin());
+        }
+
+
+        /// Stable identity used by runtime-managed multi-selection.
+        [[nodiscard]]
+        static auto row_key(const widget::node_data &row) -> std::string
+        { return row.action.empty() ? row.text : row.action; }
+
+
+        [[nodiscard]]
+        static auto contains_key(const std::vector<std::string> &keys, std::string_view key) -> bool
+        {
+            return std::ranges::find_if(keys, [key](const auto &value) { return value == key; })
+                != keys.end();
+        }
+
+
+        static void erase_key(std::vector<std::string> &keys, std::string_view key)
+        {
+            std::erase_if(keys, [key](const auto &value) { return value == key; });
+        }
+
+
+        /// Orders selected keys by their visible row order. Keys that do not
+        /// match a visible row are kept at the end so collapsing a branch does
+        /// not discard its selection.
+        [[nodiscard]]
+        static auto order_selection(const std::vector<widget::node_data *> &rows,
+                                    const std::vector<std::string>         &keys)
+            -> std::vector<std::string>
+        {
+            auto wanted = std::unordered_set<std::string> { keys.begin(), keys.end() };
+            auto seen   = std::unordered_set<std::string> {};
+            auto result = std::vector<std::string> {};
+            result.reserve(keys.size());
+
+            for (const auto *row : rows)
+            {
+                auto key = row_key(*row);
+                if (!wanted.contains(key)) continue;
+                if (!seen.insert(key).second) continue;
+                result.push_back(std::move(key));
+            }
+
+            for (const auto &key : keys)
+                if (seen.insert(key).second) result.push_back(key);
+
+            return result;
+        }
+
+
+        /// Applies the runtime-owned selection to a freshly built tree. A
+        /// container's first frame seeds its selection from rows that already
+        /// carry \c selected, so an application can provide an initial value.
+        void apply_multi_selection(widget::node_data &node)
+        {
+            if (node.multi_select)
+            {
+                auto rows = std::vector<widget::node_data *> {};
+                collect_list_rows(node, rows);
+
+                auto &state = m_selections[node.id];
+
+                if (!state.initialized)
+                {
+                    state.initialized = true;
+
+                    for (const auto *row : rows)
+                        if (row->selected) state.rows.push_back(row_key(*row));
+
+                    if (!state.rows.empty()) state.anchor = state.rows.front();
+                }
+
+                state.rows = order_selection(rows, state.rows);
+
+                for (auto *row : rows) row->selected = contains_key(state.rows, row_key(*row));
+            }
+
+            for (auto &child : node.children) apply_multi_selection(child);
+        }
+
+
+        void emit_selection(session                     &current,
+                            const widget::node_data     &row,
+                            std::uint16_t                modifiers,
+                            const multi_selection_state &state) const
+        {
+            event result;
+            result.type      = event::kind::selection_changed;
+            result.target    = row.id;
+            result.action    = row.action;
+            result.text      = row.text;
+            result.modifiers = modifiers;
+            result.selection = state.rows;
+            dispatch(result, current);
+        }
+
+
+        /// Updates a multi-select container from one row click. A plain click
+        /// replaces the selection, Shift extends from the anchor, and
+        /// Ctrl/Cmd toggles the row. Ctrl+Shift unions a range.
+        void select_row(session &current, widget::node_data &row, std::uint16_t modifiers)
+        {
+            const auto *container = row_container(row);
+            if (container == nullptr or !container->multi_select) return;
+
+            auto *editable = current.tree ? current.tree->find(container->id) : nullptr;
+            if (editable == nullptr) return;
+
+            auto rows = std::vector<widget::node_data *> {};
+            collect_list_rows(*editable, rows);
+
+            auto &state = m_selections[container->id];
+
+            if (!state.initialized)
+            {
+                state.initialized = true;
+
+                for (const auto *candidate : rows)
+                    if (candidate->selected) state.rows.push_back(row_key(*candidate));
+
+                if (!state.rows.empty()) state.anchor = state.rows.front();
+            }
+
+            const auto key   = row_key(row);
+            const auto ctrl  = (modifiers & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0;
+            const auto shift = (modifiers & SDL_KMOD_SHIFT) != 0;
+
+            if (shift and state.anchor)
+            {
+                const auto anchor
+                    = std::ranges::find_if(rows, [&state](const auto *candidate)
+                                           { return row_key(*candidate) == *state.anchor; });
+                const auto clicked = std::ranges::find_if(rows, [&key](const auto *candidate)
+                                                          { return row_key(*candidate) == key; });
+
+                if (anchor != rows.end() and clicked != rows.end())
+                {
+                    const auto first = std::min(anchor, clicked);
+                    const auto last  = std::max(anchor, clicked);
+
+                    if (!ctrl) state.rows.clear();
+
+                    for (auto it = first; it != last + 1; ++it)
+                        if (!contains_key(state.rows, row_key(**it)))
+                            state.rows.push_back(row_key(**it));
+                }
+                else
+                {
+                    state.rows   = { key };
+                    state.anchor = key;
+                }
+            }
+            else if (ctrl)
+            {
+                if (contains_key(state.rows, key))
+                    erase_key(state.rows, key);
+                else
+                    state.rows.push_back(key);
+
+                state.anchor = key;
+            }
+            else
+            {
+                state.rows   = { key };
+                state.anchor = key;
+            }
+
+            state.rows = order_selection(rows, state.rows);
+
+            for (auto *candidate : rows)
+                candidate->selected = contains_key(state.rows, row_key(*candidate));
+
+            emit_selection(current, row, modifiers, state);
+            current.dirty = true;
+        }
+
+
+        /// Ctrl+Space toggles the focused row without moving focus.
+        void toggle_row_selection(session &current, widget::node_data &row)
+        { select_row(current, row, static_cast<std::uint16_t>(SDL_KMOD_CTRL)); }
+
+
+        [[nodiscard]]
+        static auto multi_select_row(const widget::node_data *hit) -> bool
+        {
+            const auto *target = _impl::control_target(hit);
+            if (target == nullptr) return false;
+            if (target->control != widget::control_kind::list_item
+                and target->control != widget::control_kind::tree_item)
+                return false;
+
+            const auto *container = row_container(*target);
+            return container != nullptr and container->multi_select;
         }
 
 
@@ -2527,6 +2829,25 @@ namespace sleet
                                   widget::node_data &node,
                                   const SDL_Event   &native) -> bool
         {
+            if (const auto *container = row_container(node);
+                container != nullptr and container->multi_select)
+            {
+                if (native.key.key == SDLK_SPACE
+                    and (native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0)
+                {
+                    if (!native.key.repeat) toggle_row_selection(current, node);
+                    return true;
+                }
+
+                if (native.key.key == SDLK_RETURN or native.key.key == SDLK_KP_ENTER
+                    or native.key.key == SDLK_SPACE)
+                {
+                    if (!native.key.repeat)
+                        select_row(current, node, static_cast<std::uint16_t>(native.key.mod));
+                    return true;
+                }
+            }
+
             if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0) return false;
 
             switch (native.key.key)
@@ -2567,6 +2888,25 @@ namespace sleet
                                   widget::node_data &node,
                                   const SDL_Event   &native) -> bool
         {
+            if (const auto *container = row_container(node);
+                container != nullptr and container->multi_select)
+            {
+                if (native.key.key == SDLK_SPACE
+                    and (native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0)
+                {
+                    if (!native.key.repeat) toggle_row_selection(current, node);
+                    return true;
+                }
+
+                if (native.key.key == SDLK_RETURN or native.key.key == SDLK_KP_ENTER
+                    or native.key.key == SDLK_SPACE)
+                {
+                    if (!native.key.repeat)
+                        select_row(current, node, static_cast<std::uint16_t>(native.key.mod));
+                    return true;
+                }
+            }
+
             if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0) return false;
 
             switch (native.key.key)
@@ -2714,8 +3054,7 @@ namespace sleet
         auto handle_combo_key(session &current, widget::node_data &node, const SDL_Event &native)
             -> bool
         {
-            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
-                return false;
+            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0) return false;
 
             const bool is_open = current.open_combos.contains(node.id);
 
@@ -2772,8 +3111,7 @@ namespace sleet
                                      widget::node_data &node,
                                      const SDL_Event   &native) -> bool
         {
-            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
-                return false;
+            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0) return false;
 
             switch (native.key.key)
             {
@@ -2833,8 +3171,7 @@ namespace sleet
 
             // Modified Enter and Space are left to shortcuts; keyboard
             // activation uses the unmodified keys.
-            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
-                return false;
+            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0) return false;
 
             switch (native.key.key)
             {
@@ -2852,8 +3189,7 @@ namespace sleet
         auto handle_focus_key(session &current, const SDL_Event &native) -> bool
         {
             if (native.key.key != SDLK_TAB) return false;
-            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
-                return false;
+            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0) return false;
             if (native.key.repeat) return true;
 
             // Tab dismisses an open popup. Focus returns to its header before
@@ -2953,7 +3289,7 @@ namespace sleet
                         else
                         {
                             const auto scroll = text_scroll(context, *node, *bounds, edit.caret);
-                            caret = caret_at(context, *node, *bounds, point.x + scroll);
+                            caret             = caret_at(context, *node, *bounds, point.x + scroll);
                         }
                     }
 
@@ -2989,9 +3325,16 @@ namespace sleet
             case widget::control_kind::combo_option: choose_combo_option(current, *node); break;
 
             case widget::control_kind::list_item:
-                focus_node(current, *node);
-                emit_control(current, event::kind::activate, *node, node->text);
-                break;
+                {
+                    focus_node(current, *node);
+
+                    const auto *container = row_container(*node);
+                    if (container != nullptr and container->multi_select)
+                        select_row(current, *node, static_cast<std::uint16_t>(SDL_GetModState()));
+                    else
+                        emit_control(current, event::kind::activate, *node, node->text);
+                    break;
+                }
 
             case widget::control_kind::tree_item:
                 {
@@ -3009,8 +3352,12 @@ namespace sleet
                                 = point.x >= left and point.x < left + widget::tree_chevron_width;
                         }
 
+                    const auto *container = row_container(*node);
+
                     if (disclosure)
                         toggle_tree_row(current, *node);
+                    else if (container != nullptr and container->multi_select)
+                        select_row(current, *node, static_cast<std::uint16_t>(SDL_GetModState()));
                     else
                         emit_control(current, event::kind::activate, *node, node->text);
                     break;
@@ -3041,11 +3388,10 @@ namespace sleet
                         const auto scroll = text_scroll(context, *node, *bounds, edit.caret);
                         const auto caret
                             = node->multiline
-                                ? multiline_caret_at(
-                                      context, *node, *bounds, point,
-                                      current.text_scrolls.contains(node->id)
-                                          ? current.text_scrolls[node->id]
-                                          : 0.F)
+                                ? multiline_caret_at(context, *node, *bounds, point,
+                                                     current.text_scrolls.contains(node->id)
+                                                         ? current.text_scrolls[node->id]
+                                                         : 0.F)
                                 : caret_at(context, *node, *bounds, point.x + scroll);
 
                         widget::move_caret(node->text, edit, caret, true);
@@ -3067,9 +3413,12 @@ namespace sleet
             const auto *hit   = hit_at(current, native.motion.x, native.motion.y);
             const auto  point = to_logical(native.motion.x, native.motion.y);
 
+            if (current.scrollbar_drag) update_scrollbar_drag(current, point);
+            if (current.panning) update_pan(current, point);
+
             handle_control_motion(current, context, point);
 
-            update_cursor(hit);
+            update_cursor(current, hit, point);
 
             current.pointer_target
                 = hit != nullptr ? std::optional<widget::widget_id> { hit->id } : std::nullopt;
@@ -3082,9 +3431,10 @@ namespace sleet
                 current.dirty   = true;
             }
 
-            auto value = make_event(event::kind::mouse_move, hit);
-            value.x    = point.x;
-            value.y    = point.y;
+            auto value      = make_event(event::kind::mouse_move, hit);
+            value.x         = point.x;
+            value.y         = point.y;
+            value.modifiers = static_cast<std::uint16_t>(SDL_GetModState());
             dispatch(value, current);
         }
 
@@ -3102,7 +3452,61 @@ namespace sleet
                 current.tooltip_hover.reset();
             }
 
-            update_cursor(hit);
+            // The middle button pans the nearest scrollable view. Starting
+            // from the visible offset avoids a jump when an eased wheel scroll
+            // is still in flight.
+            if (native.button.button == SDL_BUTTON_MIDDLE)
+            {
+                if (is_down)
+                {
+                    if (const auto *scroller = scroll_target(hit); scroller != nullptr)
+                        current.panning =
+                            typename session::pan_state { scroller->id, point,
+                                                          current.scrolls[scroller->id] };
+                }
+                else
+                    current.panning.reset();
+            }
+
+            update_cursor(current, hit, point);
+
+            // Scrollbar gestures consume the left button before normal control
+            // handling so clicking a scrollbar never selects the row beneath.
+            if (native.button.button == SDL_BUTTON_LEFT)
+            {
+                if (is_down)
+                {
+                    if (const auto bar = scrollbar_at(current, hit, point))
+                    {
+                        begin_scrollbar_drag(current, *bar, point);
+                        update_cursor(current, hit, point);
+
+                        auto value      = make_event(event::kind::mouse_down, bar->scroller);
+                        value.x         = point.x;
+                        value.y         = point.y;
+                        value.button    = native.button.button;
+                        value.modifiers = static_cast<std::uint16_t>(SDL_GetModState());
+                        dispatch(value, current);
+                        return;
+                    }
+                }
+                else if (current.scrollbar_drag)
+                {
+                    const auto scroller_id = current.scrollbar_drag->scroller;
+                    current.scrollbar_drag.reset();
+                    update_cursor(current, hit, point);
+
+                    auto *scroller = current.tree ? current.tree->find(scroller_id) : nullptr;
+
+                    auto value      = make_event(event::kind::mouse_up, scroller);
+                    value.x         = point.x;
+                    value.y         = point.y;
+                    value.button    = native.button.button;
+                    value.modifiers = static_cast<std::uint16_t>(SDL_GetModState());
+                    dispatch(value, current);
+                    return;
+                }
+            }
 
             if (native.button.button == SDL_BUTTON_LEFT and is_down)
             {
@@ -3115,10 +3519,17 @@ namespace sleet
             auto value = make_event(is_down ? event::kind::mouse_down : event::kind::mouse_up, hit);
             value.x    = point.x;
             value.y    = point.y;
-            value.button = native.button.button;
+            value.button    = native.button.button;
+            value.modifiers = static_cast<std::uint16_t>(SDL_GetModState());
 
             if (native.button.button == SDL_BUTTON_LEFT and !is_down)
+            {
                 if (!release_matches_press(current, hit)) value.action.clear();
+
+                // Multi-select rows report a selection event instead of their
+                // click action. Keyboard activation still uses the action.
+                if (multi_select_row(hit)) value.action.clear();
+            }
 
             // Clicking the modal surface itself (its padding or scrim) cancels
             // it. Clicks on child content do not bubble into this path.
@@ -3148,6 +3559,164 @@ namespace sleet
             for (auto *current = hit; current != nullptr; current = current->parent)
                 if (current->scrollable) return current;
             return nullptr;
+        }
+
+
+        /// Finds the scrollbar under \p point, if any. Thumbs take precedence
+        /// over tracks, and the nearest scrollable ancestor owns the hit.
+        [[nodiscard]]
+        auto scrollbar_at(const session           &current,
+                          const widget::node_data *hit,
+                          math::vec2               point) const -> std::optional<scrollbar_hit>
+        {
+            const auto *scroller = scroll_target(hit);
+            if (scroller == nullptr or !current.layout) return std::nullopt;
+
+            const auto *bounds  = current.layout->find(scroller->id);
+            const auto  metrics = current.scroll_metrics.find(scroller->id);
+            if (bounds == nullptr or metrics == current.scroll_metrics.end()) return std::nullopt;
+
+            const auto bars = widget::scrollbar_layout_for(*bounds, metrics->second);
+
+            if (bars.vertical.visible and bars.vertical.thumb.contains(point))
+                return scrollbar_hit { scroller, false, true };
+            if (bars.horizontal.visible and bars.horizontal.thumb.contains(point))
+                return scrollbar_hit { scroller, true, true };
+            if (bars.vertical.visible and bars.vertical.track.contains(point))
+                return scrollbar_hit { scroller, false, false };
+            if (bars.horizontal.visible and bars.horizontal.track.contains(point))
+                return scrollbar_hit { scroller, true, false };
+
+            return std::nullopt;
+        }
+
+
+        void set_scroll_axis(session                 &current,
+                             const widget::node_data &scroller,
+                             bool                     horizontal,
+                             float                    value)
+        {
+            if (const auto metrics = current.scroll_metrics.find(scroller.id);
+                metrics != current.scroll_metrics.end())
+                value = std::clamp(value, 0.F,
+                                   horizontal ? metrics->second.max.x : metrics->second.max.y);
+            else
+                value = std::max(0.F, value);
+
+            auto &target = current.scroll_targets[scroller.id];
+            auto &offset = current.scrolls[scroller.id];
+
+            if (horizontal)
+            {
+                target.x = value;
+                offset.x = value;
+            }
+            else
+            {
+                target.y = value;
+                offset.y = value;
+            }
+
+            mark_layout_dirty(current);
+        }
+
+
+        /// Starts a scrollbar thumb drag. Clicking the track centers the thumb
+        /// on the pointer and then continues as a drag, so click-and-drag uses
+        /// one continuous gesture.
+        void begin_scrollbar_drag(session &current, const scrollbar_hit &bar, math::vec2 point)
+        {
+            if (bar.scroller == nullptr or !current.layout) return;
+
+            const auto *bounds  = current.layout->find(bar.scroller->id);
+            const auto  metrics = current.scroll_metrics.find(bar.scroller->id);
+            if (bounds == nullptr or metrics == current.scroll_metrics.end()) return;
+
+            const auto  bars = widget::scrollbar_layout_for(*bounds, metrics->second);
+            const auto &axis = bar.horizontal ? bars.horizontal : bars.vertical;
+            if (!axis.visible) return;
+
+            const auto length       = bar.horizontal ? axis.track.size.x : axis.track.size.y;
+            const auto thumb_length = bar.horizontal ? axis.thumb.size.x : axis.thumb.size.y;
+            const auto travel       = length - thumb_length;
+            if (travel <= 0.F) return;
+
+            const auto position = bar.horizontal ? point.x - axis.track.position.x
+                                                 : point.y - axis.track.position.y;
+            const auto grab     = bar.on_thumb ? (bar.horizontal ? point.x - axis.thumb.position.x
+                                                                 : point.y - axis.thumb.position.y)
+                                               : thumb_length / 2.F;
+
+            current.scrollbar_drag =
+                typename session::scrollbar_drag_state { bar.scroller->id, bar.horizontal, grab };
+
+            const auto maximum = bar.horizontal ? metrics->second.max.x : metrics->second.max.y;
+            const auto amount  = std::clamp((position - grab) / travel, 0.F, 1.F);
+            set_scroll_axis(current, *bar.scroller, bar.horizontal, amount * maximum);
+        }
+
+
+        void update_scrollbar_drag(session &current, math::vec2 point)
+        {
+            if (!current.scrollbar_drag or !current.layout) return;
+
+            const auto  drag     = *current.scrollbar_drag;
+            auto       *scroller = current.tree ? current.tree->find(drag.scroller) : nullptr;
+            const auto *bounds   = current.layout->find(drag.scroller);
+            const auto  metrics  = current.scroll_metrics.find(drag.scroller);
+            if (scroller == nullptr or bounds == nullptr or metrics == current.scroll_metrics.end())
+                return;
+
+            const auto  bars = widget::scrollbar_layout_for(*bounds, metrics->second);
+            const auto &axis = drag.horizontal ? bars.horizontal : bars.vertical;
+            if (!axis.visible) return;
+
+            const auto length       = drag.horizontal ? axis.track.size.x : axis.track.size.y;
+            const auto thumb_length = drag.horizontal ? axis.thumb.size.x : axis.thumb.size.y;
+            const auto travel       = length - thumb_length;
+            if (travel <= 0.F) return;
+
+            const auto position = drag.horizontal ? point.x - axis.track.position.x
+                                                  : point.y - axis.track.position.y;
+            const auto maximum  = drag.horizontal ? metrics->second.max.x : metrics->second.max.y;
+            const auto amount   = std::clamp((position - drag.grab) / travel, 0.F, 1.F);
+
+            set_scroll_axis(current, *scroller, drag.horizontal, amount * maximum);
+        }
+
+
+        /// Pans the viewport under a middle-button drag. Dragging right moves
+        /// content right, so the scroll offset moves in the opposite direction.
+        void update_pan(session &current, math::vec2 point)
+        {
+            if (!current.panning) return;
+
+            const auto pan      = *current.panning;
+            auto      *scroller = current.tree ? current.tree->find(pan.scroller) : nullptr;
+            if (scroller == nullptr)
+            {
+                current.panning.reset();
+                return;
+            }
+
+            const auto delta = point - pan.origin;
+            auto       value = math::vec2 { pan.offset.x - delta.x, pan.offset.y - delta.y };
+
+            if (const auto metrics = current.scroll_metrics.find(pan.scroller);
+                metrics != current.scroll_metrics.end())
+            {
+                value.x = std::clamp(value.x, 0.F, metrics->second.max.x);
+                value.y = std::clamp(value.y, 0.F, metrics->second.max.y);
+            }
+            else
+            {
+                value.x = std::max(0.F, value.x);
+                value.y = std::max(0.F, value.y);
+            }
+
+            current.scroll_targets[pan.scroller] = value;
+            current.scrolls[pan.scroller]        = value;
+            mark_layout_dirty(current);
         }
 
 
@@ -3314,15 +3883,29 @@ namespace sleet
             const auto *hit   = hit_at(current, native.wheel.mouse_x, native.wheel.mouse_y);
             auto        value = make_event(event::kind::scroll, hit);
             const auto  point = to_logical(native.wheel.mouse_x, native.wheel.mouse_y);
-            value.x           = point.x;
-            value.y           = point.y;
-            value.scroll_x    = native.wheel.x;
-            value.scroll_y    = native.wheel.y;
+
+            // Shift+wheel is the conventional horizontal scroll gesture on
+            // mice without a horizontal wheel. Platforms that already report
+            // a horizontal delta keep their native value.
+            auto scroll_x = native.wheel.x;
+            auto scroll_y = native.wheel.y;
+
+            if (scroll_x == 0.F and (SDL_GetModState() & SDL_KMOD_SHIFT) != 0)
+            {
+                scroll_x = scroll_y;
+                scroll_y = 0.F;
+            }
+
+            value.x         = point.x;
+            value.y         = point.y;
+            value.modifiers = static_cast<std::uint16_t>(SDL_GetModState());
+            value.scroll_x  = scroll_x;
+            value.scroll_y  = scroll_y;
 
             if (const auto *scroller = scroll_target(hit); scroller != nullptr)
             {
-                const auto dx = -native.wheel.x * 48.F;
-                const auto dy = -native.wheel.y * 48.F;
+                const auto dx = -scroll_x * 48.F;
+                const auto dy = -scroll_y * 48.F;
 
                 auto &target = current.scroll_targets[scroller->id];
                 target.x    += dx;
@@ -3359,8 +3942,7 @@ namespace sleet
         auto handle_focus_group_key(session &current, const SDL_Event &native) -> bool
         {
             if (native.type != SDL_EVENT_KEY_DOWN) return false;
-            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
-                return false;
+            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0) return false;
 
             auto *node = focused_node(current);
             if (node == nullptr or !_impl::effectively_visible(*node)) return false;
@@ -3378,7 +3960,7 @@ namespace sleet
             case widget::control_kind::combo_popup:
             case widget::control_kind::checkbox_indicator:
             case widget::control_kind::radio_indicator:
-            case widget::control_kind::none: break;
+            case widget::control_kind::none:               break;
             }
 
             const auto *group = containing_focus_group(*node);
@@ -3395,8 +3977,11 @@ namespace sleet
             case SDLK_RIGHT:
             case SDLK_DOWN:  delta = 1; break;
             case SDLK_HOME:  edge = true; break;
-            case SDLK_END:   edge = true; last = true; break;
-            default:         return false;
+            case SDLK_END:
+                edge = true;
+                last = true;
+                break;
+            default: return false;
             }
 
             if (native.key.repeat and edge) return true;
@@ -3405,21 +3990,19 @@ namespace sleet
             gather_group_members(*group, current.focus_groups, members);
             if (members.empty()) return false;
 
-            auto index = std::size_t { 0 };
+            auto       index = std::size_t { 0 };
             const auto found
                 = std::find_if(members.begin(), members.end(), [&current](const auto *member)
                                { return current.focused and member->id == *current.focused; });
-            if (found != members.end())
-                index = static_cast<std::size_t>(found - members.begin());
+            if (found != members.end()) index = static_cast<std::size_t>(found - members.begin());
 
             if (edge)
                 index = last ? members.size() - 1 : 0;
             else
             {
                 const auto count = static_cast<std::ptrdiff_t>(members.size());
-                const auto next
-                    = (static_cast<std::ptrdiff_t>(index) + delta + count) % count;
-                index = static_cast<std::size_t>(next);
+                const auto next  = (static_cast<std::ptrdiff_t>(index) + delta + count) % count;
+                index            = static_cast<std::size_t>(next);
             }
 
             if (current.focused and members[index]->id == *current.focused) return true;
@@ -3462,15 +4045,14 @@ namespace sleet
 
             const auto children_hidden = hidden or !node.visible or node.disabled;
             for (const auto &child : node.children)
-                find_view_shortcut(child, key, modifiers, repeat, depth + 1,
-                                   children_hidden, best);
+                find_view_shortcut(child, key, modifiers, repeat, depth + 1, children_hidden, best);
         }
 
 
         /// While a text field has focus, plain keys must reach the field instead
         /// of a shortcut. Function keys never insert text and still work.
         [[nodiscard]]
-        auto shortcut_key_allowed(session &current,
+        auto shortcut_key_allowed(session      &current,
                                   std::uint32_t key,
                                   std::uint16_t modifiers) const -> bool
         {
@@ -3479,11 +4061,9 @@ namespace sleet
                 or !_impl::effectively_visible(*focused))
                 return true;
 
-            if ((modifiers & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
-                return true;
+            if ((modifiers & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0) return true;
 
-            return (key >= SDLK_F1 and key <= SDLK_F12)
-                or (key >= SDLK_F13 and key <= SDLK_F24);
+            return (key >= SDLK_F1 and key <= SDLK_F12) or (key >= SDLK_F13 and key <= SDLK_F24);
         }
 
 
@@ -3501,12 +4081,11 @@ namespace sleet
             if (current.has_view_shortcuts and current.tree)
             {
                 const widget::node_data *scope = &*current.tree;
-                if (current.active_modal)
-                    scope = find_node(current, *current.active_modal);
+                if (current.active_modal) scope = find_node(current, *current.active_modal);
 
                 if (scope != nullptr)
-                    find_view_shortcut(*scope, native.key.key, modifiers,
-                                       native.key.repeat, 0, false, best);
+                    find_view_shortcut(*scope, native.key.key, modifiers, native.key.repeat, 0,
+                                       false, best);
             }
 
             if (best.binding != nullptr)
@@ -3683,7 +4262,7 @@ namespace sleet
 
             case SDL_EVENT_WINDOW_MOUSE_LEAVE:
                 clear_pointer_state(current);
-                update_cursor(nullptr);
+                update_cursor(current, nullptr, {});
                 break;
 
             case SDL_EVENT_WINDOW_FOCUS_LOST:
@@ -3871,7 +4450,7 @@ namespace sleet
 
                 if (it->age >= it->duration)
                 {
-                    it = m_toasts.erase(it);
+                    it      = m_toasts.erase(it);
                     repaint = true;
                     continue;
                 }
@@ -3939,6 +4518,7 @@ namespace sleet
             rebuild_node_index(current);
 
             sync_controls(current, *current.tree);
+            apply_multi_selection(*current.tree);
             enforce_modal_focus(current, *current.tree);
             apply_autofocus(current, *current.tree);
 
@@ -4122,6 +4702,12 @@ namespace sleet
                 {
                     m_redraw_requested = false;
                     mark_layout_dirty(current);
+                }
+
+                if (m_selection_requested)
+                {
+                    m_selection_requested = false;
+                    mark_view_dirty(current);
                 }
 
                 const auto now     = SDL_GetTicks();

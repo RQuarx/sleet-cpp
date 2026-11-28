@@ -926,11 +926,8 @@ struct sleet::render_context::impl
     auto editor_lines(const font_spec     &spec,
                       std::string_view     text,
                       std::optional<float> width_limit,
-                      text_wrap_mode       wrap)
-        -> kei::result<const std::vector<txt::wrapped_line> *>
-    {
-        return wrapped_lines(spec, text, width_limit, wrap, true);
-    }
+                      text_wrap_mode wrap) -> kei::result<const std::vector<txt::wrapped_line> *>
+    { return wrapped_lines(spec, text, width_limit, wrap, true); }
 
 
     [[nodiscard]]
@@ -1135,7 +1132,7 @@ struct sleet::render_context::impl
         case widget::control_kind::list_item:
         case widget::control_kind::tree_view:
         case widget::control_kind::tree_item:
-        case widget::control_kind::none:   break;
+        case widget::control_kind::none:      break;
         }
 
         return std::nullopt;
@@ -1423,8 +1420,8 @@ struct sleet::render_context::impl
             and std::count(line.text.begin(), line.text.end(), ' ') > 0)
             return draw_justified_line(line.text, *font, fg, content, line.width, top, line_height);
 
-        const auto x
-            = content.position.x + widget::text_alignment_offset(alignment, content.size.x - line.width);
+        const auto x = content.position.x
+                     + widget::text_alignment_offset(alignment, content.size.x - line.width);
 
         auto drawn = draw_text_run(line.text, *font, fg, x, top, line_height);
         if (!drawn) return std::move(drawn.error()).unexpected();
@@ -1482,7 +1479,8 @@ struct sleet::render_context::impl
         text_input_view view { .caret_x = *width };
 
         if (*total + trailing_width <= available_width)
-            view.offset = widget::text_alignment_offset(alignment, available_width - *total - trailing_width);
+            view.offset = widget::text_alignment_offset(alignment,
+                                                        available_width - *total - trailing_width);
         else
         {
             const auto overflow
@@ -1544,7 +1542,7 @@ struct sleet::render_context::impl
     /// to the next line.
     [[nodiscard]]
     static auto line_at(const std::vector<sleet::txt::wrapped_line> &lines,
-                        std::size_t                                 offset) noexcept -> std::size_t
+                        std::size_t                                  offset) noexcept -> std::size_t
     {
         for (std::size_t i = 0; i + 1 < lines.size(); i++)
             if (offset < lines[i + 1].begin) return i;
@@ -1555,17 +1553,16 @@ struct sleet::render_context::impl
 
     /// Measures the caret's horizontal position inside one wrapped line.
     [[nodiscard]]
-    auto caret_x_in_line(const node_data                    &node,
-                         const sleet::txt::wrapped_line     &line,
-                         std::size_t                         offset) -> kei::result<float>
+    auto caret_x_in_line(const node_data                &node,
+                         const sleet::txt::wrapped_line &line,
+                         std::size_t                     offset) -> kei::result<float>
     {
         const auto end = line.begin + line.text.size();
         offset         = std::clamp(offset, line.begin, end);
         if (offset == line.begin) return 0.F;
 
-        const auto prefix
-            = std::string_view { node.text }.substr(line.begin, offset - line.begin);
-        auto font = get_font_covering(node.font, prefix);
+        const auto prefix = std::string_view { node.text }.substr(line.begin, offset - line.begin);
+        auto       font   = get_font_covering(node.font, prefix);
         if (!font) return std::move(font.error()).unexpected();
         return measure_line(*font, prefix);
     }
@@ -1573,9 +1570,8 @@ struct sleet::render_context::impl
 
     /// Returns the closest caret offset to \p x inside one wrapped line.
     [[nodiscard]]
-    auto offset_in_line(const node_data                &node,
-                        const sleet::txt::wrapped_line &line,
-                        float                           x) -> kei::result<std::size_t>
+    auto offset_in_line(const node_data &node, const sleet::txt::wrapped_line &line, float x)
+        -> kei::result<std::size_t>
     {
         const auto end = line.begin + line.text.size();
         if (line.text.empty()) return line.begin;
@@ -1615,9 +1611,9 @@ struct sleet::render_context::impl
 
 
     [[nodiscard]]
-    auto caret_in_lines(const node_data                            &node,
+    auto caret_in_lines(const node_data                             &node,
                         const std::vector<sleet::txt::wrapped_line> &lines,
-                        std::size_t                                 offset) -> kei::result<line_caret>
+                        std::size_t offset) -> kei::result<line_caret>
     {
         if (lines.empty()) return line_caret {};
 
@@ -1668,10 +1664,9 @@ struct sleet::render_context::impl
 
         const auto line_height
             = static_cast<float>(std::max(1, TTF_GetFontHeight(*font))) / pixel_scale;
-        const auto line_count   = std::max<std::size_t>(1, wrapped.size());
-        const auto total_height = line_height * static_cast<float>(line_count);
-        const auto stored_scroll
-            = text_scrolls.contains(node.id) ? text_scrolls[node.id] : 0.F;
+        const auto line_count    = std::max<std::size_t>(1, wrapped.size());
+        const auto total_height  = line_height * static_cast<float>(line_count);
+        const auto stored_scroll = text_scrolls.contains(node.id) ? text_scrolls[node.id] : 0.F;
         const auto scroll_y
             = std::clamp(stored_scroll, 0.F, std::max(0.F, total_height - content.size.y));
 
@@ -1777,8 +1772,7 @@ struct sleet::render_context::impl
                         continue;
 
                     auto line_font = get_font_covering(node.font, wrapped[i].text);
-                    if (!line_font)
-                        return restore_after(std::move(line_font.error()).unexpected());
+                    if (!line_font) return restore_after(std::move(line_font.error()).unexpected());
 
                     if (auto res = draw_text_run(wrapped[i].text, *line_font, text_color,
                                                  line_left(i), top, line_height);
@@ -1830,8 +1824,8 @@ struct sleet::render_context::impl
                 return restore_after(std::move(res));
 
             const auto caret_offset = widget::clamp_offset(preedit_text, preedit_caret);
-            auto       prefix       = measure_line(
-                *preedit_font, std::string_view { preedit_text }.substr(0, caret_offset));
+            auto prefix = measure_line(*preedit_font,
+                                       std::string_view { preedit_text }.substr(0, caret_offset));
             if (!prefix) return restore_after(std::move(prefix.error()).unexpected());
             caret_x += *prefix;
         }
@@ -1840,9 +1834,9 @@ struct sleet::render_context::impl
         {
             const auto top
                 = content.position.y + (line_height * static_cast<float>(caret_line)) - scroll_y;
-            const auto caret_left = std::clamp(line_left(caret_line) + caret_x, content.position.x,
-                                               content.position.x
-                                                   + std::max(0.F, content.size.x - 2.F));
+            const auto caret_left
+                = std::clamp(line_left(caret_line) + caret_x, content.position.x,
+                             content.position.x + std::max(0.F, content.size.x - 2.F));
 
             const rect caret_rect {
                 caret_left,
@@ -2269,76 +2263,35 @@ struct sleet::render_context::impl
         const auto &metrics = it->second;
         if (metrics.max.x <= 0.F and metrics.max.y <= 0.F) return {};
 
-        const auto physical  = to_physical(bounds);
-        const auto scale     = pixel_scale;
-        const auto thickness = 6.F * scale;
-        const auto inset     = 2.F * scale;
+        const auto scale = pixel_scale;
 
-        if (physical.size.x <= thickness or physical.size.y <= thickness) return {};
+        // Scrollbar geometry is shared with the runtime so clicks, drags, and
+        // painted thumbs always agree.
+        const auto bars = widget::scrollbar_layout_for(bounds, metrics);
+        if (!bars.vertical.visible and !bars.horizontal.visible) return {};
 
         const auto track_color
             = theme.scrollbar_track.value_or(theme.field.bg.value_or(color { 0, 0, 0, 120 }));
         const auto thumb_color
             = theme.scrollbar_thumb.value_or(theme.border.value_or(color { 255, 255, 255, 90 }));
+        const auto radius = widget::scrollbar_thickness * scale / 2.F;
 
-        const auto vertical   = metrics.max.y > 0.5F;
-        const auto horizontal = metrics.max.x > 0.5F;
-
-        if (vertical)
+        if (bars.vertical.visible)
         {
-            const auto track = rect {
-                physical.right() - inset - thickness,
-                physical.position.y + inset,
-                thickness,
-                physical.size.y - (2.F * inset),
-            };
+            const auto track = to_physical(bars.vertical.track);
+            const auto thumb = to_physical(bars.vertical.thumb);
 
-            if (track.size.y > 0.F)
-            {
-                if (auto res = fill_rounded(renderer, track, thickness / 2.F, track_color); !res)
-                    return res;
-
-                const auto thumb = widget::scrollbar_thumb_geometry(
-                    track.size.y, track.size.y + (metrics.max.y * scale), metrics.offset.y * scale,
-                    24.F * scale);
-
-                if (thumb.length > 0.F)
-                    if (auto res
-                        = fill_rounded(renderer,
-                                       rect { track.position.x, track.position.y + thumb.start,
-                                              thickness, thumb.length },
-                                       thickness / 2.F, thumb_color);
-                        !res)
-                        return res;
-            }
+            if (auto res = fill_rounded(renderer, track, radius, track_color); !res) return res;
+            if (auto res = fill_rounded(renderer, thumb, radius, thumb_color); !res) return res;
         }
 
-        if (horizontal)
+        if (bars.horizontal.visible)
         {
-            const auto track = rect {
-                physical.position.x + inset,
-                physical.bottom() - inset - thickness,
-                physical.size.x - (2.F * inset) - (vertical ? thickness + inset : 0.F),
-                thickness,
-            };
+            const auto track = to_physical(bars.horizontal.track);
+            const auto thumb = to_physical(bars.horizontal.thumb);
 
-            if (track.size.x > 0.F)
-            {
-                if (auto res = fill_rounded(renderer, track, thickness / 2.F, track_color); !res)
-                    return res;
-
-                const auto thumb = widget::scrollbar_thumb_geometry(
-                    track.size.x, track.size.x + (metrics.max.x * scale), metrics.offset.x * scale,
-                    24.F * scale);
-
-                if (thumb.length > 0.F)
-                    if (auto res = fill_rounded(renderer,
-                                                rect { track.position.x + thumb.start,
-                                                       track.position.y, thumb.length, thickness },
-                                                thickness / 2.F, thumb_color);
-                        !res)
-                        return res;
-            }
+            if (auto res = fill_rounded(renderer, track, radius, track_color); !res) return res;
+            if (auto res = fill_rounded(renderer, thumb, radius, thumb_color); !res) return res;
         }
 
         return {};
@@ -2849,7 +2802,7 @@ auto sleet::render_context::text_input_caret_rect(const widget::node_data      &
             return it != m_impl->text_scrolls.end() ? it->second : 0.F;
         }();
 
-        auto index = std::size_t { 0 };
+        auto index   = std::size_t { 0 };
         auto caret_x = 0.F;
 
         if (!(*lines)->empty())
@@ -2861,7 +2814,7 @@ auto sleet::render_context::text_input_caret_rect(const widget::node_data      &
         }
 
         const auto line_width = (*lines)->empty() ? 0.F : (**lines)[index].width;
-        const auto left       = content.position.x
+        const auto left = content.position.x
                         + widget::text_alignment_offset(alignment, content.size.x - line_width);
 
         if (has_preedit) caret_x += preedit_prefix;

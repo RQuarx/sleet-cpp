@@ -367,13 +367,9 @@ namespace sleet::widget
     /// \param action The action reported by the resulting \c key_down event.
     /// \param repeat Whether the shortcut also fires while the key repeats.
     [[nodiscard]]
-    inline auto on_shortcut(std::uint32_t key,
-                            std::uint16_t modifiers,
-                            std::string   action,
-                            bool          repeat = false)
-    {
-        return on_shortcut(key_chord { key, modifiers, repeat }, std::move(action));
-    }
+    inline auto
+    on_shortcut(std::uint32_t key, std::uint16_t modifiers, std::string action, bool repeat = false)
+    { return on_shortcut(key_chord { key, modifiers, repeat }, std::move(action)); }
 
     [[nodiscard]]
     inline auto visible(bool value = true)
@@ -515,6 +511,17 @@ namespace sleet::widget
     inline auto selected(bool value = true)
     {
         return _impl::make_modifier([value](node_data &data) { data.selected = value; });
+    }
+
+
+    /// Enables runtime-managed multi-selection on a list, table, or tree
+    /// container. Shift-click selects a range, Ctrl/Cmd-click toggles one row,
+    /// and the runtime keeps the selection set between view rebuilds. Rows
+    /// marked \c selected seed the initial selection.
+    [[nodiscard]]
+    inline auto multi_select(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.multi_select = value; });
     }
 
 

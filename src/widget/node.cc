@@ -100,6 +100,7 @@ namespace
         self.autofocus          = std::forward<Other>(other).autofocus;
         self.checked            = std::forward<Other>(other).checked;
         self.selected           = std::forward<Other>(other).selected;
+        self.multi_select       = std::forward<Other>(other).multi_select;
         self.tree_depth         = std::forward<Other>(other).tree_depth;
         self.tree_expanded      = std::forward<Other>(other).tree_expanded;
         self.tree_has_children  = std::forward<Other>(other).tree_has_children;

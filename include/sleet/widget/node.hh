@@ -178,6 +178,11 @@ namespace sleet::widget
         /// theme's selection color as their surface.
         bool selected = false;
 
+        /// Enables runtime-managed multi-selection on a list, table, or tree
+        /// container. Shift-click selects a range, Ctrl/Cmd-click toggles a
+        /// row, and the runtime owns the resulting selection set.
+        bool multi_select = false;
+
         /// Indentation depth of a tree row. The runtime uses it for parent and
         /// child navigation, and the renderer places the disclosure chevron.
         int tree_depth = 0;

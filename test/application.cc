@@ -1,8 +1,10 @@
 #include <cmath>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_events.h>
@@ -18,11 +20,11 @@
 
 namespace
 {
-    auto push_mouse(bool down, float x, float y) -> void
+    auto push_mouse(bool down, float x, float y, std::uint8_t button = SDL_BUTTON_LEFT) -> void
     {
         SDL_Event native {};
         native.type          = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
-        native.button.button = SDL_BUTTON_LEFT;
+        native.button.button = button;
         native.button.down   = down;
         native.button.x      = x;
         native.button.y      = y;
@@ -252,7 +254,8 @@ const boost::ut::suite application_tests = []
                   .on_event(
                       [](const sleet::event &input) -> std::optional<message>
                       {
-                          if (input.type == sleet::event::kind::text_edit and input.action == "notes")
+                          if (input.type == sleet::event::kind::text_edit
+                              and input.action == "notes")
                               return message { {}, input.text };
                           if (input.type == sleet::event::kind::submit and input.action == "notes")
                               return message { "notes", {} };
@@ -290,7 +293,7 @@ const boost::ut::suite application_tests = []
 
         struct state
         {
-            std::string text = "ab\ncd";
+            std::string text    = "ab\ncd";
             int         submits = 0;
         };
 
@@ -307,8 +310,14 @@ const boost::ut::suite application_tests = []
 
         auto result
             = app { "sleet-text-area-lines-test", 320, 240, std::move(theme) }
-                  .on_boot([]() -> kei::result<std::pair<state, message>>
-                           { return std::pair { state {}, message { "boot", {} } }; })
+                  .on_boot(
+                      []() -> kei::result<std::pair<state, message>>
+                      {
+                          return std::pair {
+                              state {},
+                               message { "boot", {} }
+                          };
+                      })
                   .on_update(
                       [](state &current, const message &value) -> kei::result<>
                       {
@@ -327,7 +336,8 @@ const boost::ut::suite application_tests = []
                   .on_event(
                       [](const sleet::event &input) -> std::optional<message>
                       {
-                          if (input.type == sleet::event::kind::text_edit and input.action == "notes")
+                          if (input.type == sleet::event::kind::text_edit
+                              and input.action == "notes")
                               return message { {}, input.text };
                           if (input.type == sleet::event::kind::submit and input.action == "notes")
                               return message { "notes", {} };
@@ -366,8 +376,8 @@ const boost::ut::suite application_tests = []
         if (newline == std::string::npos) return;
 
         expect(observed.text.find('Z') < newline);
-        expect(eq(std::string_view { observed.text }.substr(newline + 1),
-                  std::string_view { "Ycd" }));
+        expect(
+            eq(std::string_view { observed.text }.substr(newline + 1), std::string_view { "Ycd" }));
     };
 
     "Home stays on the empty line after a trailing newline"_test = []
@@ -378,59 +388,54 @@ const boost::ut::suite application_tests = []
         if (theme.fonts.face(font_role::body).path.empty()) return;
 
         struct state
-        {
-            std::string text = "ab\n";
-        };
+        { std::string text = "ab\n"; };
 
         struct message
-        {
-            std::string text;
-        };
+        { std::string text; };
 
         using app = sleet::application<state, message>;
 
         auto observed = state {};
         auto frame    = 0;
 
-        auto result
-            = app { "sleet-text-area-trailing-test", 320, 240, std::move(theme) }
-                  .on_boot([]() -> kei::result<std::pair<state, message>>
-                           { return std::pair { state {}, message { "boot" } }; })
-                  .on_update(
-                      [](state &current, const message &value) -> kei::result<>
-                      {
-                          if (value.text != "boot") current.text = value.text;
-                          return {};
-                      })
-                  .on_view(
-                      [&observed](const state &current)
-                      {
-                          observed = current;
-                          return column()[text_area(current.text, "notes")];
-                      })
-                  .on_event(
-                      [](const sleet::event &input) -> std::optional<message>
-                      {
-                          if (input.type == sleet::event::kind::text_edit
-                              and input.action == "notes")
-                              return message { input.text };
-                          return std::nullopt;
-                      })
-                  .on_subscription(
-                      [&frame]() -> std::optional<message>
-                      {
-                          switch (++frame)
-                          {
-                          case 1:  push_key(SDLK_TAB); break;
-                          case 2:  push_key(SDLK_HOME); break;
-                          case 3:  push_text("X"); break;
-                          case 4:  push_quit(); break;
-                          default: break;
-                          }
+        auto result = app { "sleet-text-area-trailing-test", 320, 240, std::move(theme) }
+                          .on_boot([]() -> kei::result<std::pair<state, message>>
+                                   { return std::pair { state {}, message { "boot" } }; })
+                          .on_update(
+                              [](state &current, const message &value) -> kei::result<>
+                              {
+                                  if (value.text != "boot") current.text = value.text;
+                                  return {};
+                              })
+                          .on_view(
+                              [&observed](const state &current)
+                              {
+                                  observed = current;
+                                  return column()[text_area(current.text, "notes")];
+                              })
+                          .on_event(
+                              [](const sleet::event &input) -> std::optional<message>
+                              {
+                                  if (input.type == sleet::event::kind::text_edit
+                                      and input.action == "notes")
+                                      return message { input.text };
+                                  return std::nullopt;
+                              })
+                          .on_subscription(
+                              [&frame]() -> std::optional<message>
+                              {
+                                  switch (++frame)
+                                  {
+                                  case 1:  push_key(SDLK_TAB); break;
+                                  case 2:  push_key(SDLK_HOME); break;
+                                  case 3:  push_text("X"); break;
+                                  case 4:  push_quit(); break;
+                                  default: break;
+                                  }
 
-                          return std::nullopt;
-                      })
-                  .run();
+                                  return std::nullopt;
+                              })
+                          .run();
 
         expect(eq(result, 0));
         expect(eq(observed.text, std::string { "ab\nX" }));
@@ -1091,6 +1096,331 @@ const boost::ut::suite application_tests = []
         expect(eq(observed.hits, 1));
     };
 
+    "dragging a scrollbar thumb scrolls the viewport"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        { int hits = 0; };
+
+        struct message
+        { std::string action; };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto instance = app { "sleet-scrollbar-drag-test", 320, 240, std::move(theme) };
+        instance
+            .on_boot([]() -> kei::result<std::pair<state, message>>
+                     { return std::pair { state {}, message {} }; })
+            .on_update(
+                [](state &current, const message &value) -> kei::result<>
+                {
+                    if (value.action == "three") current.hits++;
+                    return {};
+                })
+            .on_view(
+                [&observed](const state &current)
+                {
+                    observed = current;
+                    return column()[column()[button("One", "one") | width(200.F) | height(40.F),
+                                             button("Two", "two") | width(200.F) | height(40.F),
+                                             button("Three", "three") | width(200.F) | height(40.F)]
+                                    | id("viewport") | width(200.F) | height(60.F) | scrollable()
+                                    | clip()]
+                         | width(200.F) | height(200.F);
+                })
+            .on_event(
+                [](const sleet::event &input) -> std::optional<message>
+                {
+                    if (input.type == sleet::event::kind::mouse_up and input.action == "three")
+                        return message { "three" };
+                    return std::nullopt;
+                })
+            .on_subscription(
+                [&frame]() -> std::optional<message>
+                {
+                    switch (++frame)
+                    {
+                    case 1:
+                        push_mouse(true, 195.F, 10.F);
+                        push_motion(195.F, 55.F);
+                        push_mouse(false, 195.F, 55.F);
+                        break;
+                    case 2:
+                        push_mouse(true, 50.F, 40.F);
+                        push_mouse(false, 50.F, 40.F);
+                        break;
+                    case 3:  push_quit(); break;
+                    default: break;
+                    }
+
+                    return std::nullopt;
+                });
+
+        instance.set_reduced_motion();
+
+        const auto result = instance.run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.hits, 1));
+    };
+
+    "middle-button dragging pans a scroll viewport"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        { int hits = 0; };
+
+        struct message
+        { std::string action; };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto instance = app { "sleet-middle-pan-test", 320, 240, std::move(theme) };
+        instance
+            .on_boot([]() -> kei::result<std::pair<state, message>>
+                     { return std::pair { state {}, message {} }; })
+            .on_update(
+                [](state &current, const message &value) -> kei::result<>
+                {
+                    if (value.action == "three") current.hits++;
+                    return {};
+                })
+            .on_view(
+                [&observed](const state &current)
+                {
+                    observed = current;
+                    return column()[column()[button("One", "one") | width(200.F) | height(40.F),
+                                             button("Two", "two") | width(200.F) | height(40.F),
+                                             button("Three", "three") | width(200.F) | height(40.F)]
+                                    | id("viewport") | width(200.F) | height(60.F) | scrollable()
+                                    | clip()]
+                         | width(200.F) | height(200.F);
+                })
+            .on_event(
+                [](const sleet::event &input) -> std::optional<message>
+                {
+                    if (input.type == sleet::event::kind::mouse_up and input.action == "three")
+                        return message { "three" };
+                    return std::nullopt;
+                })
+            .on_subscription(
+                [&frame]() -> std::optional<message>
+                {
+                    switch (++frame)
+                    {
+                    case 1:
+                        push_mouse(true, 50.F, 50.F, SDL_BUTTON_MIDDLE);
+                        push_motion(50.F, 10.F);
+                        push_mouse(false, 50.F, 10.F, SDL_BUTTON_MIDDLE);
+                        break;
+                    case 2:
+                        push_mouse(true, 50.F, 50.F);
+                        push_mouse(false, 50.F, 50.F);
+                        break;
+                    case 3:  push_quit(); break;
+                    default: break;
+                    }
+
+                    return std::nullopt;
+                });
+
+        instance.set_reduced_motion();
+
+        const auto result = instance.run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.hits, 1));
+    };
+
+    "Shift+wheel scrolls horizontally"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        { int hits = 0; };
+
+        struct message
+        { std::string action; };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto instance = app { "sleet-horizontal-wheel-test", 320, 240, std::move(theme) };
+        instance
+            .on_boot([]() -> kei::result<std::pair<state, message>>
+                     { return std::pair { state {}, message {} }; })
+            .on_update(
+                [](state &current, const message &value) -> kei::result<>
+                {
+                    if (value.action == "three") current.hits++;
+                    return {};
+                })
+            .on_view(
+                [&observed](const state &current)
+                {
+                    observed = current;
+                    return column()
+                               [column()[row()[button("One", "one") | width(40.F) | height(60.F),
+                                               button("Two", "two") | width(40.F) | height(60.F),
+                                               button("Three", "three") | width(40.F)
+                                                   | height(60.F)]
+                                         | width(120.F)]
+                                | id("strip") | width(60.F) | height(60.F) | scrollable() | clip()]
+                         | width(200.F) | height(200.F);
+                })
+            .on_event(
+                [](const sleet::event &input) -> std::optional<message>
+                {
+                    if (input.type == sleet::event::kind::mouse_up and input.action == "three")
+                        return message { "three" };
+                    return std::nullopt;
+                })
+            .on_subscription(
+                [&frame]() -> std::optional<message>
+                {
+                    switch (++frame)
+                    {
+                    case 1:
+                        SDL_SetModState(SDL_KMOD_SHIFT);
+                        push_wheel(20.F, 20.F, 0.F, -1.F);
+                        break;
+                    case 2:
+                        SDL_SetModState(SDL_KMOD_NONE);
+                        push_mouse(true, 50.F, 20.F);
+                        push_mouse(false, 50.F, 20.F);
+                        break;
+                    case 3:  push_quit(); break;
+                    default: break;
+                    }
+
+                    return std::nullopt;
+                });
+
+        instance.set_reduced_motion();
+
+        const auto result = instance.run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.hits, 1));
+    };
+
+    "multi-select rows honor Shift ranges and Ctrl toggles"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        { std::vector<std::string> selection; };
+
+        struct message
+        { std::vector<std::string> selection; };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto instance = app { "sleet-multi-select-test", 320, 240, std::move(theme) };
+        instance
+            .on_boot([]() -> kei::result<std::pair<state, message>>
+                     { return std::pair { state {}, message {} }; })
+            .on_update(
+                [](state &current, const message &value) -> kei::result<>
+                {
+                    current.selection = value.selection;
+                    return {};
+                })
+            .on_view(
+                [&observed](const state &current)
+                {
+                    observed = current;
+
+                    auto list = list_view() | id("list") | multi_select() | height(200.F);
+                    list      = std::move(
+                        list)[list_item("A", "a"), list_item("B", "b"), list_item("C", "c")];
+
+                    return column()[std::move(list)] | size(200.F, 200.F);
+                })
+            .on_event(
+                [](const sleet::event &input) -> std::optional<message>
+                {
+                    if (input.type == sleet::event::kind::selection_changed)
+                        return message { input.selection };
+                    return std::nullopt;
+                })
+            .on_subscription(
+                [&frame]() -> std::optional<message>
+                {
+                    switch (++frame)
+                    {
+                    case 1:
+                        push_mouse(true, 20.F, 20.F);
+                        push_mouse(false, 20.F, 20.F);
+                        break;
+                    case 2:
+                        SDL_SetModState(SDL_KMOD_CTRL);
+                        push_mouse(true, 20.F, 88.F);
+                        push_mouse(false, 20.F, 88.F);
+                        break;
+                    case 3:
+                        SDL_SetModState(SDL_KMOD_SHIFT);
+                        push_mouse(true, 20.F, 54.F);
+                        push_mouse(false, 20.F, 54.F);
+                        break;
+                    case 4:
+                        SDL_SetModState(SDL_KMOD_CTRL);
+                        push_mouse(true, 20.F, 54.F);
+                        push_mouse(false, 20.F, 54.F);
+                        break;
+                    case 5:
+                        SDL_SetModState(SDL_KMOD_CTRL);
+                        push_mouse(true, 20.F, 20.F);
+                        push_mouse(false, 20.F, 20.F);
+                        break;
+                    case 6:
+                        SDL_SetModState(SDL_KMOD_NONE);
+                        push_quit();
+                        break;
+                    default: break;
+                    }
+
+                    return std::nullopt;
+                });
+
+        instance.set_reduced_motion();
+
+        const auto result = instance.run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.selection.size(), std::size_t { 2 }));
+        if (observed.selection.size() == 2U)
+        {
+            expect(eq(observed.selection.at(0), std::string { "a" }));
+            expect(eq(observed.selection.at(1), std::string { "c" }));
+        }
+    };
+
     "focus reveals an off-screen row inside a scroll viewport"_test = []
     {
         using namespace sleet::widget;
@@ -1414,12 +1744,10 @@ const boost::ut::suite overlay_tests = []
                               and input.action == "name")
                               return message { "text", input.text };
 
-                          if (input.type == sleet::event::kind::submit
-                              and input.action == "name")
+                          if (input.type == sleet::event::kind::submit and input.action == "name")
                               return message { "submit", {} };
 
-                          if (input.type == sleet::event::kind::key_down
-                              and !input.action.empty())
+                          if (input.type == sleet::event::kind::key_down and !input.action.empty())
                               return message { input.action, {} };
 
                           return std::nullopt;
@@ -1506,8 +1834,7 @@ const boost::ut::suite overlay_tests = []
                   .on_event(
                       [](const sleet::event &input) -> std::optional<message>
                       {
-                          if (input.type == sleet::event::kind::key_down
-                              and !input.action.empty())
+                          if (input.type == sleet::event::kind::key_down and !input.action.empty())
                               return message { input.action };
                           return std::nullopt;
                       })
@@ -1715,61 +2042,60 @@ const boost::ut::suite overlay_tests = []
         auto observed = state {};
         auto frame    = 0;
 
-        auto result
-            = app { "sleet-focus-group-test", 320, 240, std::move(theme) }
-                  .on_boot([]() -> kei::result<std::pair<state, message>>
-                           { return std::pair { state {}, message {} }; })
-                  .on_update(
-                      [](state &current, const message &value) -> kei::result<>
-                      {
-                          if (value.action == "a")
-                              current.a++;
-                          else if (value.action == "b")
-                              current.b++;
-                          else if (value.action == "c")
-                              current.c++;
-                          else if (value.action == "outside")
-                              current.outside++;
-                          return {};
-                      })
-                  .on_view(
-                      [&observed](const state &current)
-                      {
-                          observed = current;
-                          return column()[row()[button("A", "a"), button("B", "b"),
-                                                 button("C", "c")]
-                                              | focus_group(),
-                                          button("Outside", "outside")];
-                      })
-                  .on_event(
-                      [](const sleet::event &input) -> std::optional<message>
-                      {
-                          if (input.type == sleet::event::kind::activate)
-                              return message { input.action };
-                          return std::nullopt;
-                      })
-                  .on_subscription(
-                      [&frame]() -> std::optional<message>
-                      {
-                          switch (++frame)
-                          {
-                          case 1:  push_key(SDLK_TAB); break;
-                          case 2:  push_key(SDLK_RIGHT); break;
-                          case 3:  push_key(SDLK_RIGHT); break;
-                          case 4:  push_key(SDLK_RETURN); break;
-                          case 5:  push_key(SDLK_TAB); break;
-                          case 6:  push_key(SDLK_RETURN); break;
-                          case 7:  push_key(SDLK_TAB, SDL_KMOD_SHIFT); break;
-                          case 8:  push_key(SDLK_RETURN); break;
-                          case 9:  push_key(SDLK_LEFT); break;
-                          case 10: push_key(SDLK_RETURN); break;
-                          case 11: push_quit(); break;
-                          default: break;
-                          }
+        auto result = app { "sleet-focus-group-test", 320, 240, std::move(theme) }
+                          .on_boot([]() -> kei::result<std::pair<state, message>>
+                                   { return std::pair { state {}, message {} }; })
+                          .on_update(
+                              [](state &current, const message &value) -> kei::result<>
+                              {
+                                  if (value.action == "a")
+                                      current.a++;
+                                  else if (value.action == "b")
+                                      current.b++;
+                                  else if (value.action == "c")
+                                      current.c++;
+                                  else if (value.action == "outside")
+                                      current.outside++;
+                                  return {};
+                              })
+                          .on_view(
+                              [&observed](const state &current)
+                              {
+                                  observed = current;
+                                  return column()[row()[button("A", "a"), button("B", "b"),
+                                                        button("C", "c")]
+                                                      | focus_group(),
+                                                  button("Outside", "outside")];
+                              })
+                          .on_event(
+                              [](const sleet::event &input) -> std::optional<message>
+                              {
+                                  if (input.type == sleet::event::kind::activate)
+                                      return message { input.action };
+                                  return std::nullopt;
+                              })
+                          .on_subscription(
+                              [&frame]() -> std::optional<message>
+                              {
+                                  switch (++frame)
+                                  {
+                                  case 1:  push_key(SDLK_TAB); break;
+                                  case 2:  push_key(SDLK_RIGHT); break;
+                                  case 3:  push_key(SDLK_RIGHT); break;
+                                  case 4:  push_key(SDLK_RETURN); break;
+                                  case 5:  push_key(SDLK_TAB); break;
+                                  case 6:  push_key(SDLK_RETURN); break;
+                                  case 7:  push_key(SDLK_TAB, SDL_KMOD_SHIFT); break;
+                                  case 8:  push_key(SDLK_RETURN); break;
+                                  case 9:  push_key(SDLK_LEFT); break;
+                                  case 10: push_key(SDLK_RETURN); break;
+                                  case 11: push_quit(); break;
+                                  default: break;
+                                  }
 
-                          return std::nullopt;
-                      })
-                  .run();
+                                  return std::nullopt;
+                              })
+                          .run();
 
         expect(eq(result, 0));
         expect(eq(observed.a, 0));
@@ -1824,8 +2150,7 @@ const boost::ut::suite overlay_tests = []
                       {
                           if (input.type == sleet::event::kind::activate)
                               return message { "activate" };
-                          if (input.type == sleet::event::kind::key_down
-                              and !input.action.empty())
+                          if (input.type == sleet::event::kind::key_down and !input.action.empty())
                               return message { input.action };
                           return std::nullopt;
                       })
@@ -1906,8 +2231,7 @@ const boost::ut::suite overlay_tests = []
                   .on_event(
                       [](const sleet::event &input) -> std::optional<message>
                       {
-                          if (input.type == sleet::event::kind::key_down
-                              and !input.action.empty())
+                          if (input.type == sleet::event::kind::key_down and !input.action.empty())
                               return message { input.action };
                           return std::nullopt;
                       })
@@ -1986,8 +2310,7 @@ const boost::ut::suite overlay_tests = []
                   .on_event(
                       [](const sleet::event &input) -> std::optional<message>
                       {
-                          if (input.type == sleet::event::kind::key_down
-                              and !input.action.empty())
+                          if (input.type == sleet::event::kind::key_down and !input.action.empty())
                               return message { input.action };
                           return std::nullopt;
                       })
@@ -2048,16 +2371,16 @@ const boost::ut::suite overlay_tests = []
                               current.repeating++;
                           return {};
                       })
-                  .on_view([&observed](const state &current)
-                           {
-                               observed = current;
-                               return column()[label("shortcuts")];
-                           })
+                  .on_view(
+                      [&observed](const state &current)
+                      {
+                          observed = current;
+                          return column()[label("shortcuts")];
+                      })
                   .on_event(
                       [](const sleet::event &input) -> std::optional<message>
                       {
-                          if (input.type == sleet::event::kind::key_down
-                              and !input.action.empty())
+                          if (input.type == sleet::event::kind::key_down and !input.action.empty())
                               return message { input.action };
                           return std::nullopt;
                       })
