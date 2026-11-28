@@ -24,6 +24,31 @@ namespace sleet::widget
     using separator_node  = node<node_kind::box>;
     using spacer_node     = node<node_kind::box>;
     using badge_node      = node<node_kind::text>;
+    using list_view_node  = node<node_kind::column>;
+    using list_item_node  = node<node_kind::box>;
+    using table_view_node = node<node_kind::column>;
+    using table_row_node  = node<node_kind::row>;
+    using table_cell_node = node<node_kind::box>;
+    using tree_view_node  = node<node_kind::column>;
+    using tree_item_node  = node<node_kind::box>;
+
+
+    /// The initial state of a tree row.
+    struct tree_item_options
+    {
+        /// Zero for a root row; each level adds one indentation step.
+        int depth = 0;
+
+        /// Whether the row's children are currently shown.
+        bool expanded = false;
+
+        /// Whether the row has children, even while they are collapsed.
+        bool has_children = false;
+
+        /// The action reported when the row is expanded or collapsed. When
+        /// empty, the row's normal action is used.
+        std::string toggle_action;
+    };
 
 
     /// A box that is laid out independently of its parent's flow and anchored
@@ -258,4 +283,126 @@ namespace sleet::widget
     /// \return The floating menu panel.
     [[nodiscard]]
     auto menu(std::source_location origin = std::source_location::current()) -> column_node;
+
+    /// A vertically scrolling list surface. Rows are normally created with
+    /// \c list_item. The view is one Tab stop; Up/Down, Home/End, and
+    /// PageUp/PageDown move focus between its rows, and focus reveal scrolls
+    /// the active row into view.
+    /// \param origin The source location used for diagnostics.
+    /// \return The list view widget.
+    [[nodiscard]]
+    auto list_view(std::source_location origin = std::source_location::current()) -> list_view_node;
+
+    /// A selectable row inside a \c list_view. Clicking the row or pressing
+    /// Enter or Space emits \c event::kind::activate with \p action. Pass
+    /// \p is_selected to paint the row with the theme's selection color.
+    /// \param text The row label.
+    /// \param action The action reported by activation.
+    /// \param is_selected Whether the row is selected.
+    /// \param origin The source location used for diagnostics.
+    /// \return The list row widget.
+    [[nodiscard]]
+    auto list_item(std::string          text,
+                   std::string          action,
+                   bool                 is_selected = false,
+                   std::source_location origin = std::source_location::current()) -> list_item_node;
+
+    /// A list row with arbitrary content.
+    /// \param content The row content, usually a label or row of widgets.
+    /// \param action The action reported by activation.
+    /// \param is_selected Whether the row is selected.
+    /// \param origin The source location used for diagnostics.
+    /// \return The list row widget.
+    [[nodiscard]]
+    auto list_item(node_data            content,
+                   std::string          action,
+                   bool                 is_selected = false,
+                   std::source_location origin = std::source_location::current()) -> list_item_node;
+
+    /// A vertically scrolling table surface. It uses the same focus and
+    /// keyboard navigation as \c list_view; rows are created with
+    /// \c table_row and cells with \c table_cell.
+    /// \param origin The source location used for diagnostics.
+    /// \return The table view widget.
+    [[nodiscard]]
+    auto table_view(std::source_location origin = std::source_location::current())
+        -> table_view_node;
+
+    /// A selectable table row. Add \c table_cell children with the same
+    /// weights used by the header so the columns line up.
+    /// \param action The action reported by activation.
+    /// \param is_selected Whether the row is selected.
+    /// \param origin The source location used for diagnostics.
+    /// \return The table row widget.
+    [[nodiscard]]
+    auto table_row(std::string          action,
+                   bool                 is_selected = false,
+                   std::source_location origin = std::source_location::current()) -> table_row_node;
+
+    /// A non-selectable table header row. Add \c table_header_cell children
+    /// with the same weights used by the data rows.
+    /// \param origin The source location used for diagnostics.
+    /// \return The table header widget.
+    [[nodiscard]]
+    auto table_header(std::source_location origin = std::source_location::current())
+        -> table_row_node;
+
+    /// A table cell with a weighted share of the row width.
+    /// \param text The cell text.
+    /// \param weight The relative column width; values are clamped to a small
+    /// positive minimum.
+    /// \param origin The source location used for diagnostics.
+    /// \return The table cell widget.
+    [[nodiscard]]
+    auto table_cell(std::string          text,
+                    float                weight = 1.F,
+                    std::source_location origin = std::source_location::current())
+        -> table_cell_node;
+
+    /// A bold table header cell with a weighted share of the row width.
+    /// \param text The header text.
+    /// \param weight The relative column width; values are clamped to a small
+    /// positive minimum.
+    /// \param origin The source location used for diagnostics.
+    /// \return The table header cell widget.
+    [[nodiscard]]
+    auto table_header_cell(std::string          text,
+                           float                weight = 1.F,
+                           std::source_location origin = std::source_location::current())
+        -> table_cell_node;
+
+    /// A vertically scrolling tree surface. Rows are normally created with
+    /// \c tree_item and laid out as flat siblings whose \c tree_depth describes
+    /// the hierarchy. Left/Right collapse, expand, and move to the parent or
+    /// first child.
+    /// \param origin The source location used for diagnostics.
+    /// \return The tree view widget.
+    [[nodiscard]]
+    auto tree_view(std::source_location origin = std::source_location::current()) -> tree_view_node;
+
+    /// A selectable tree row. Clicking the row or pressing Enter or Space emits
+    /// \c event::kind::activate with \p action. Clicking the disclosure area or
+    /// pressing Left/Right emits the toggle action when the row has children.
+    /// \param text The row label.
+    /// \param action The action reported by activation.
+    /// \param options The row's depth, expansion state, and toggle action.
+    /// \param origin The source location used for diagnostics.
+    /// \return The tree row widget.
+    [[nodiscard]]
+    auto tree_item(std::string          text,
+                   std::string          action,
+                   tree_item_options    options = {},
+                   std::source_location origin = std::source_location::current()) -> tree_item_node;
+
+    /// A tree row with arbitrary content.
+    /// \param content The row content, usually a label or row of widgets.
+    /// \param action The action reported by activation.
+    /// \param options The row's depth, expansion state, and toggle action.
+    /// \param origin The source location used for diagnostics.
+    /// \return The tree row widget.
+    [[nodiscard]]
+    auto tree_item(node_data            content,
+                   std::string          action,
+                   tree_item_options    options = {},
+                   std::source_location origin = std::source_location::current()) -> tree_item_node;
 }

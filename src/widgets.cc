@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 #include "sleet/widget/modifier.hh"
@@ -278,4 +279,125 @@ auto sleet::widget::menu(std::source_location origin) -> column_node
     return column(origin) | floating() | anchor_at(anchor_point::top_left) | stacking(200)
          | background_of(tone::field) | border_of(tone::border) | padding(4.F) | gap(2.F)
          | width(200.F);
+}
+
+
+namespace
+{
+    [[nodiscard]]
+    auto column_weight(float value) noexcept -> float
+    { return std::isfinite(value) ? std::max(0.01F, value) : 1.F; }
+}
+
+
+auto sleet::widget::list_view(std::source_location origin) -> list_view_node
+{
+    return column(origin) | width(sizing::fill()) | height(240.F) | control(control_kind::list_view)
+         | focus_group() | padding(4.F) | gap(2.F) | background_of(tone::field)
+         | border_of(tone::border) | radius(6.F) | clip() | scrollable();
+}
+
+
+auto sleet::widget::list_item(node_data            content,
+                              std::string          action,
+                              bool                 is_selected,
+                              std::source_location origin) -> list_item_node
+{
+    return box(origin)[std::move(content)] | width(sizing::fill()) | height(32.F)
+         | padding(6.F, 10.F) | control(control_kind::list_item) | focusable()
+         | on_click(std::move(action)) | selected(is_selected) | radius(4.F) | transition(0.1F);
+}
+
+
+auto sleet::widget::list_item(std::string          text,
+                              std::string          action,
+                              bool                 is_selected,
+                              std::source_location origin) -> list_item_node
+{
+    auto content = label(text, origin) | hexpand() | align_self(align::center)
+                 | text_wrap(text_wrap_mode::no_wrap);
+    auto result  = list_item(to_data(std::move(content)), std::move(action), is_selected, origin);
+    result      |= text_of(std::move(text));
+    return result;
+}
+
+
+auto sleet::widget::table_view(std::source_location origin) -> table_view_node
+{
+    return column(origin) | width(sizing::fill()) | height(240.F) | control(control_kind::list_view)
+         | focus_group() | padding(1.F) | gap(1.F) | background_of(tone::border)
+         | border_of(tone::border) | radius(6.F) | clip() | scrollable();
+}
+
+
+auto sleet::widget::table_row(std::string action, bool is_selected, std::source_location origin)
+    -> table_row_node
+{
+    return row(origin) | width(sizing::fill()) | height(32.F) | background_of(tone::base)
+         | control(control_kind::list_item) | focusable() | on_click(std::move(action))
+         | selected(is_selected) | radius(0.F) | transition(0.1F);
+}
+
+
+auto sleet::widget::table_header(std::source_location origin) -> table_row_node
+{
+    return row(origin) | width(sizing::fill()) | height(32.F) | background_of(tone::field)
+         | radius(0.F);
+}
+
+
+auto sleet::widget::table_cell(std::string text, float weight, std::source_location origin)
+    -> table_cell_node
+{
+    return box(origin)[label(std::move(text), origin) | hexpand() | align_self(align::center)
+                       | text_wrap(text_wrap_mode::no_wrap)]
+         | width(sizing::grow()) | flex(column_weight(weight)) | padding(6.F, 8.F) | clip();
+}
+
+
+auto sleet::widget::table_header_cell(std::string text, float weight, std::source_location origin)
+    -> table_cell_node
+{
+    return box(origin)[label(std::move(text), origin) | hexpand() | align_self(align::center)
+                       | text_wrap(text_wrap_mode::no_wrap) | text_weight(font_weight::semibold)]
+         | width(sizing::grow()) | flex(column_weight(weight)) | padding(6.F, 8.F) | clip();
+}
+
+
+auto sleet::widget::tree_view(std::source_location origin) -> tree_view_node
+{
+    return column(origin) | width(sizing::fill()) | height(280.F) | control(control_kind::tree_view)
+         | focus_group() | padding(4.F) | gap(1.F) | background_of(tone::field)
+         | border_of(tone::border) | radius(6.F) | clip() | scrollable();
+}
+
+
+auto sleet::widget::tree_item(node_data            content,
+                              std::string          action,
+                              tree_item_options    options,
+                              std::source_location origin) -> tree_item_node
+{
+    const auto row_depth = std::max(0, options.depth);
+    const auto indent
+        = tree_row_inset + (static_cast<float>(row_depth) * tree_indent_width) + tree_chevron_width;
+
+    return box(origin)[std::move(content)] | width(sizing::fill()) | height(30.F)
+         | padding(math::edge_insets { 5.F, 10.F, 5.F, indent }) | control(control_kind::tree_item)
+         | focusable() | on_click(std::move(action)) | depth(row_depth) | expanded(options.expanded)
+         | has_children(options.has_children) | on_toggle(std::move(options.toggle_action))
+         | radius(4.F) | transition(0.1F);
+}
+
+
+auto sleet::widget::tree_item(std::string          text,
+                              std::string          action,
+                              tree_item_options    options,
+                              std::source_location origin) -> tree_item_node
+{
+    auto content = label(text, origin) | hexpand() | align_self(align::center)
+                 | text_wrap(text_wrap_mode::no_wrap);
+    auto result
+        = tree_item(to_data(std::move(content)), std::move(action), std::move(options), origin);
+    result |= text_of(std::move(text));
+    return result;
 }

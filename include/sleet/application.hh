@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <print>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -1162,20 +1163,29 @@ namespace sleet
         }
 
 
+        void emit_action(session                 &current,
+                         event::kind              type,
+                         const widget::node_data &node,
+                         std::string              action,
+                         std::string              text  = {},
+                         float                    value = 0.F) const
+        {
+            event result;
+            result.type   = type;
+            result.target = node.id;
+            result.action = std::move(action);
+            result.text   = std::move(text);
+            result.value  = value;
+            dispatch(result, current);
+        }
+
+
         void emit_control(session                 &current,
                           event::kind              type,
                           const widget::node_data &node,
                           std::string              text  = {},
                           float                    value = 0.F) const
-        {
-            event result;
-            result.type   = type;
-            result.target = node.id;
-            result.action = node.action;
-            result.text   = std::move(text);
-            result.value  = value;
-            dispatch(result, current);
-        }
+        { emit_action(current, type, node, node.action, std::move(text), value); }
 
 
         static void clear_pointer_state(session &current)
@@ -2403,6 +2413,237 @@ namespace sleet
         }
 
 
+        /// The nearest list or tree surface that owns \p node, if any.
+        [[nodiscard]]
+        static auto row_container(const widget::node_data &node) noexcept
+            -> const widget::node_data *
+        {
+            for (const auto *ancestor = node.parent; ancestor != nullptr;
+                 ancestor             = ancestor->parent)
+                if (ancestor->control == widget::control_kind::list_view
+                    or ancestor->control == widget::control_kind::tree_view)
+                    return ancestor;
+
+            return nullptr;
+        }
+
+
+        /// Collects visible rows that belong directly to \p node. Nested list
+        /// and tree surfaces own their own rows and are not descended into.
+        static void collect_list_rows(const widget::node_data                &node,
+                                      std::vector<const widget::node_data *> &rows)
+        {
+            for (const auto &child :
+                 node.children
+                     | std::views::filter([](const auto &value)
+                                          { return value.visible and !value.disabled; }))
+            {
+                if (child.control == widget::control_kind::list_view
+                    or child.control == widget::control_kind::tree_view)
+                    continue;
+
+                if (child.control == widget::control_kind::list_item
+                    or child.control == widget::control_kind::tree_item)
+                {
+                    rows.push_back(&child);
+                    continue;
+                }
+
+                collect_list_rows(child, rows);
+            }
+        }
+
+
+        [[nodiscard]]
+        static auto row_index(const std::vector<const widget::node_data *> &rows,
+                              const widget::node_data &row) -> std::optional<std::size_t>
+        {
+            const auto found = std::ranges::find_if(rows, [&row](const auto *candidate)
+                                                    { return candidate->id == row.id; });
+            if (found == rows.end()) return std::nullopt;
+            return static_cast<std::size_t>(found - rows.begin());
+        }
+
+
+        /// How many rows fit in the viewport. Used by PageUp and PageDown.
+        [[nodiscard]]
+        auto page_step(const session           &current,
+                       const widget::node_data &container,
+                       const widget::node_data &row) const -> std::ptrdiff_t
+        {
+            constexpr auto fallback = std::ptrdiff_t { 10 };
+            if (!current.layout) return fallback;
+
+            const auto *viewport = current.layout->find(container.id);
+            const auto *bounds   = current.layout->find(row.id);
+            if (viewport == nullptr or bounds == nullptr or bounds->size.y <= 0.F) return fallback;
+
+            const auto visible = viewport->size.y / bounds->size.y;
+            return std::max(std::ptrdiff_t { 1 }, static_cast<std::ptrdiff_t>(visible));
+        }
+
+
+        /// Moves focus by \p delta within the rows of the nearest list or tree
+        /// surface. Edges clamp instead of wrapping, matching a list box.
+        auto move_row_focus(session                 &current,
+                            const widget::node_data &row,
+                            std::ptrdiff_t           delta,
+                            bool                     edge = false,
+                            bool                     last = false) -> bool
+        {
+            const auto *container = row_container(row);
+            if (container == nullptr) return false;
+
+            auto rows = std::vector<const widget::node_data *> {};
+            collect_list_rows(*container, rows);
+            const auto index = row_index(rows, row);
+            if (!index or rows.empty()) return false;
+
+            auto next = std::ptrdiff_t { 0 };
+            if (edge)
+                next = last ? static_cast<std::ptrdiff_t>(rows.size()) - 1 : 0;
+            else
+                next = std::clamp(static_cast<std::ptrdiff_t>(*index) + delta, std::ptrdiff_t { 0 },
+                                  static_cast<std::ptrdiff_t>(rows.size()) - 1);
+
+            if (static_cast<std::size_t>(next) == *index) return true;
+
+            focus_node(current, *rows[static_cast<std::size_t>(next)], true);
+            return true;
+        }
+
+
+        void toggle_tree_row(session &current, widget::node_data &node)
+        {
+            const auto action
+                = node.tree_toggle_action.empty() ? node.action : node.tree_toggle_action;
+            if (action.empty()) return;
+
+            emit_action(current, event::kind::activate, node, action, node.text);
+        }
+
+
+        auto handle_list_item_key(session           &current,
+                                  widget::node_data &node,
+                                  const SDL_Event   &native) -> bool
+        {
+            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0) return false;
+
+            switch (native.key.key)
+            {
+            case SDLK_UP:   return move_row_focus(current, node, -1);
+            case SDLK_DOWN: return move_row_focus(current, node, 1);
+            case SDLK_HOME: return move_row_focus(current, node, 0, true, false);
+            case SDLK_END:  return move_row_focus(current, node, 0, true, true);
+
+            case SDLK_PAGEUP:
+            case SDLK_PAGEDOWN:
+                {
+                    const auto *container = row_container(node);
+                    if (container == nullptr) return false;
+                    const auto step = page_step(current, *container, node);
+                    return move_row_focus(current, node,
+                                          native.key.key == SDLK_PAGEDOWN ? step : -step);
+                }
+
+            // A list is vertical. Consuming horizontal arrows keeps focus from
+            // escaping through the enclosing focus group.
+            case SDLK_LEFT:
+            case SDLK_RIGHT: return true;
+
+            case SDLK_RETURN:
+            case SDLK_KP_ENTER:
+            case SDLK_SPACE:
+                if (native.key.repeat) return true;
+                emit_control(current, event::kind::activate, node, node.text);
+                return true;
+
+            default: return false;
+            }
+        }
+
+
+        auto handle_tree_item_key(session           &current,
+                                  widget::node_data &node,
+                                  const SDL_Event   &native) -> bool
+        {
+            if ((native.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0) return false;
+
+            switch (native.key.key)
+            {
+            case SDLK_UP:   return move_row_focus(current, node, -1);
+            case SDLK_DOWN: return move_row_focus(current, node, 1);
+            case SDLK_HOME: return move_row_focus(current, node, 0, true, false);
+            case SDLK_END:  return move_row_focus(current, node, 0, true, true);
+
+            case SDLK_PAGEUP:
+            case SDLK_PAGEDOWN:
+                {
+                    const auto *container = row_container(node);
+                    if (container == nullptr) return false;
+                    const auto step = page_step(current, *container, node);
+                    return move_row_focus(current, node,
+                                          native.key.key == SDLK_PAGEDOWN ? step : -step);
+                }
+
+            case SDLK_RIGHT:
+                {
+                    if (!node.tree_has_children) return true;
+                    if (!node.tree_expanded)
+                    {
+                        toggle_tree_row(current, node);
+                        return true;
+                    }
+
+                    const auto *container = row_container(node);
+                    if (container == nullptr) return true;
+
+                    auto rows = std::vector<const widget::node_data *> {};
+                    collect_list_rows(*container, rows);
+                    const auto index = row_index(rows, node);
+                    if (index and *index + 1 < rows.size()
+                        and rows[*index + 1]->tree_depth > node.tree_depth)
+                        focus_node(current, *rows[*index + 1], true);
+                    return true;
+                }
+
+            case SDLK_LEFT:
+                {
+                    if (node.tree_has_children and node.tree_expanded)
+                    {
+                        toggle_tree_row(current, node);
+                        return true;
+                    }
+
+                    const auto *container = row_container(node);
+                    if (container == nullptr) return true;
+
+                    auto rows = std::vector<const widget::node_data *> {};
+                    collect_list_rows(*container, rows);
+                    const auto index = row_index(rows, node);
+                    if (!index) return true;
+
+                    auto parents
+                        = rows | std::views::take(*index) | std::views::reverse
+                        | std::views::filter([&node](const auto *candidate)
+                                             { return candidate->tree_depth < node.tree_depth; });
+                    if (!std::ranges::empty(parents))
+                        focus_node(current, **std::ranges::begin(parents), true);
+                    return true;
+                }
+
+            case SDLK_RETURN:
+            case SDLK_KP_ENTER:
+            case SDLK_SPACE:
+                if (native.key.repeat) return true;
+                emit_control(current, event::kind::activate, node, node.text);
+                return true;
+
+            default: return false;
+            }
+        }
+
+
         static void collect_combo_options(const widget::node_data                &node,
                                           std::vector<const widget::node_data *> &options)
         {
@@ -2576,6 +2817,12 @@ namespace sleet
             case widget::control_kind::combo_box: return handle_combo_key(current, *node, native);
             case widget::control_kind::combo_option:
                 return handle_combo_option_key(current, *node, native);
+            case widget::control_kind::list_item:
+                return handle_list_item_key(current, *node, native);
+            case widget::control_kind::tree_item:
+                return handle_tree_item_key(current, *node, native);
+            case widget::control_kind::list_view:
+            case widget::control_kind::tree_view:
             case widget::control_kind::combo_popup:
             case widget::control_kind::checkbox_indicator:
             case widget::control_kind::radio_indicator:
@@ -2741,6 +2988,36 @@ namespace sleet
 
             case widget::control_kind::combo_option: choose_combo_option(current, *node); break;
 
+            case widget::control_kind::list_item:
+                focus_node(current, *node);
+                emit_control(current, event::kind::activate, *node, node->text);
+                break;
+
+            case widget::control_kind::tree_item:
+                {
+                    focus_node(current, *node);
+
+                    auto disclosure = false;
+                    if (node->tree_has_children)
+                        if (const auto *bounds
+                            = current.layout ? current.layout->find(node->id) : nullptr)
+                        {
+                            const auto left = bounds->position.x + widget::tree_row_inset
+                                            + (static_cast<float>(node->tree_depth)
+                                               * widget::tree_indent_width);
+                            disclosure
+                                = point.x >= left and point.x < left + widget::tree_chevron_width;
+                        }
+
+                    if (disclosure)
+                        toggle_tree_row(current, *node);
+                    else
+                        emit_control(current, event::kind::activate, *node, node->text);
+                    break;
+                }
+
+            case widget::control_kind::list_view:
+            case widget::control_kind::tree_view:
             case widget::control_kind::combo_popup:
             case widget::control_kind::checkbox_indicator:
             case widget::control_kind::radio_indicator:
@@ -3093,7 +3370,11 @@ namespace sleet
             case widget::control_kind::text_input:
             case widget::control_kind::slider:
             case widget::control_kind::combo_box:
-            case widget::control_kind::combo_option: return false;
+            case widget::control_kind::combo_option:
+            case widget::control_kind::list_item:
+            case widget::control_kind::tree_item:          return false;
+            case widget::control_kind::list_view:
+            case widget::control_kind::tree_view:
             case widget::control_kind::combo_popup:
             case widget::control_kind::checkbox_indicator:
             case widget::control_kind::radio_indicator:

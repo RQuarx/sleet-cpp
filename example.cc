@@ -27,7 +27,9 @@ namespace
         bool        notifications = true;
         bool        autosave      = false;
         float       volume        = 0.4F;
-        std::string picked;
+        std::string selected_file = "main.cpp";
+        std::string selected_tree = "src";
+        bool        src_open      = true;
         std::string menu_choice;
         bool        menu_open   = false;
         bool        dialog_open = false;
@@ -53,7 +55,9 @@ namespace
             toggle_notifications,
             toggle_autosave,
             volume_changed,
-            scroll_pick,
+            file_pick,
+            tree_pick,
+            tree_toggle,
             menu_toggle,
             menu_close,
             menu_pick,
@@ -125,8 +129,11 @@ namespace
         if (action == "details") return message { message::kind::toggle_details };
         if (action == "notifications") return message { message::kind::toggle_notifications };
         if (action == "autosave") return message { message::kind::toggle_autosave };
-        if (action.starts_with("scroll_"))
-            return message { message::kind::scroll_pick, action.substr(7) };
+        if (action.starts_with("file_"))
+            return message { message::kind::file_pick, action.substr(5) };
+        if (action.starts_with("tree_"))
+            return message { message::kind::tree_pick, action.substr(5) };
+        if (action == "toggle_src") return message { message::kind::tree_toggle };
         if (action == "menu_toggle") return message { message::kind::menu_toggle };
         if (action == "menu_close") return message { message::kind::menu_close };
         if (action == "menu_duplicate" or action == "menu_archive" or action == "menu_delete")
@@ -159,7 +166,7 @@ namespace
                                          | text_role(font_role::heading) | text_color(0xF3F5F8_rgb),
                                      muted("Every built-in widget in one interactive window.")]
                                 | gap(2.F),
-                            spacer(), badge("v1.6.1")]
+                            spacer(), badge("v1.7.0")]
                     | gap(12.F) | width(sizing::fill()) | valign(align::center);
 
 
@@ -208,21 +215,64 @@ namespace
             | gap(8.F));
 
 
-        auto scroll_rows = column() | gap(4.F);
-        for (auto i = 1; i <= 8; i++)
-            scroll_rows = std::move(
-                scroll_rows)[button(std::format("Row {}", i), std::format("scroll_{}", i))
-                             | width(sizing::fill())];
+        auto file_table = table_view() | height(150.F) | width(sizing::grow()) | flex(1.F);
+        file_table      = std::move(file_table)[table_header()[table_header_cell("Name", 2.F),
+                                                               table_header_cell("Size", 1.F)]];
 
-        auto scroll_card = card(
-            column()[row()[section_title("Scrollable list"), spacer(),
-                           badge(current.picked.empty() ? "scroll me"
-                                                        : std::format("Row {}", current.picked))]
-                         | gap(8.F) | width(sizing::fill()) | valign(align::center),
-                     scroll_rows | id("gallery-scroll") | height(116.F) | width(sizing::fill())
-                         | clip() | scrollable(),
-                     muted("Wheel to scroll. Tab into an off-screen row to reveal it.")]
-            | gap(8.F));
+        const auto add_file = [&](std::string name, std::string size)
+        {
+            auto row = table_row(std::format("file_{}", name), current.selected_file == name);
+            row      = std::move(
+                row)[table_cell(std::move(name), 2.F), table_cell(std::move(size), 1.F)];
+            file_table = std::move(file_table)[std::move(row)];
+        };
+
+        add_file("main.cpp", "12 KB");
+        add_file("widgets.cc", "38 KB");
+        add_file("application.cc", "64 KB");
+        add_file("render_context.cc", "48 KB");
+        add_file("theme.cc", "22 KB");
+        add_file("layout.cc", "31 KB");
+        add_file("node.cc", "18 KB");
+        add_file("README.md", "9 KB");
+
+        auto project_tree = tree_view() | height(150.F) | width(sizing::grow()) | flex(1.F);
+        project_tree      = std::move(project_tree)[tree_item("src", "tree_src",
+                                                              { .depth         = 0,
+                                                                .expanded      = current.src_open,
+                                                                .has_children  = true,
+                                                                .toggle_action = "toggle_src" })
+                                                    | selected(current.selected_tree == "src")];
+
+        if (current.src_open)
+            project_tree = std::move(project_tree)
+                [tree_item(
+                     "main.cpp", "tree_main.cpp",
+                     { .depth = 1, .expanded = false, .has_children = false, .toggle_action = {} })
+                     | selected(current.selected_tree == "main.cpp"),
+                 tree_item(
+                     "widgets.cc", "tree_widgets.cc",
+                     { .depth = 1, .expanded = false, .has_children = false, .toggle_action = {} })
+                     | selected(current.selected_tree == "widgets.cc"),
+                 tree_item(
+                     "application.cc", "tree_application.cc",
+                     { .depth = 1, .expanded = false, .has_children = false, .toggle_action = {} })
+                     | selected(current.selected_tree == "application.cc")];
+
+        project_tree = std::move(project_tree)[tree_item("README.md", "tree_README.md",
+                                                         { .depth         = 0,
+                                                           .expanded      = false,
+                                                           .has_children  = false,
+                                                           .toggle_action = {} })
+                                               | selected(current.selected_tree == "README.md")];
+
+        auto catalog_card
+            = card(column()[section_title("Lists, tables, and trees"),
+                            row()[std::move(file_table), std::move(project_tree)] | gap(12.F)
+                                | width(sizing::fill()),
+                            muted("Arrow keys navigate rows. Enter or a click selects. Left/Right "
+                                  "collapse and expand tree branches.")]
+                   | gap(8.F));
 
 
         auto ghost_label = current.show_details ? "Hide details" : "Show details";
@@ -245,8 +295,8 @@ namespace
                          | gap(8.F) | valign(align::center),
                      stat_line("Name", current.name.empty() ? "(empty)" : current.name),
                      stat_line("Color", current.color), stat_line("Density", current.density),
-                     stat_line("Picked",
-                               current.picked.empty() ? "(none)" : "Row " + current.picked),
+                     stat_line("File", current.selected_file),
+                     stat_line("Tree", current.selected_tree),
                      stat_line("Count", std::format("{}", current.count)), separator(),
                      label(std::format("Volume {:.0f}%", current.volume * 100.F)) | text_size(20.F)
                          | text_color(0xE6E8EB_rgb)]
@@ -298,7 +348,7 @@ namespace
 
 
         auto left  = column()[std::move(input_card), std::move(selection_card),
-                              std::move(scroll_card), std::move(styles_card)]
+                              std::move(catalog_card), std::move(styles_card)]
                    | width(sizing::grow()) | flex(1.F) | gap(14.F);
         auto right = column()[std::move(buttons_card), std::move(slider_card),
                               std::move(notes_card), std::move(overlay_card),
@@ -382,7 +432,9 @@ auto main() -> int
                         current.autosave = !current.autosave;
                         break;
                     case message::kind::volume_changed: current.volume = value.value; break;
-                    case message::kind::scroll_pick:    current.picked = value.text; break;
+                    case message::kind::file_pick:      current.selected_file = value.text; break;
+                    case message::kind::tree_pick:      current.selected_tree = value.text; break;
+                    case message::kind::tree_toggle:    current.src_open = !current.src_open; break;
                     case message::kind::menu_toggle: current.menu_open = !current.menu_open; break;
                     case message::kind::menu_close:  current.menu_open = false; break;
                     case message::kind::menu_pick:

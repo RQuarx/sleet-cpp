@@ -21,6 +21,10 @@ namespace sleet::widget
         slider,
         checkbox_indicator,
         radio_indicator,
+        list_view,
+        list_item,
+        tree_view,
+        tree_item,
     };
 
 
@@ -52,6 +56,14 @@ namespace sleet::widget
     /// Logical-pixel geometry shared by the slider renderer and hit testing.
     inline constexpr float slider_track_height = 6.F;
     inline constexpr float slider_thumb_radius = 8.F;
+
+
+    /// Logical-pixel geometry shared by tree rows and the disclosure renderer.
+    /// A row's left padding is the inset, the depth indentation, and one
+    /// chevron column, so content starts after the disclosure area.
+    inline constexpr float tree_row_inset     = 8.F;
+    inline constexpr float tree_indent_width  = 16.F;
+    inline constexpr float tree_chevron_width = 18.F;
 
 
     /// A caret and selection anchor stored as byte offsets into UTF-8 text.

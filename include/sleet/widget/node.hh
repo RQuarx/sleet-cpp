@@ -168,6 +168,24 @@ namespace sleet::widget
         /// The initial state of an indicator widget.
         bool checked = false;
 
+        /// Marks a row or other widget as selected. Selected widgets use the
+        /// theme's selection color as their surface.
+        bool selected = false;
+
+        /// Indentation depth of a tree row. The runtime uses it for parent and
+        /// child navigation, and the renderer places the disclosure chevron.
+        int tree_depth = 0;
+
+        /// Whether a tree row's children are currently shown.
+        bool tree_expanded = false;
+
+        /// Whether a tree row has children, even while they are collapsed.
+        bool tree_has_children = false;
+
+        /// The action reported when a tree row is expanded or collapsed. When
+        /// empty, the row's normal action is used.
+        std::string tree_toggle_action;
+
         /// A normalized value in the range zero to one for sliders.
         float control_value = 0.F;
 

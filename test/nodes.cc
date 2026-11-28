@@ -150,6 +150,46 @@ const boost::ut::suite node_tests = []
         expect(tree.find("option-a")->control == control_kind::combo_option);
     };
 
+    "list and tree rows derive ids from their actions"_test = []
+    {
+        const auto build_list = [](const std::vector<std::string> &actions)
+        {
+            auto view = list_view() | id("rows");
+            for (const auto &action : actions) view = std::move(view)[list_item(action, action)];
+            auto data = std::move(view).release();
+            if (const auto result = data.finalize(); !result)
+                throw std::runtime_error { result.error().what() };
+            return data;
+        };
+
+        const auto before = build_list({ "alpha", "beta" });
+        const auto after  = build_list({ "beta", "alpha" });
+
+        expect(eq(before.children.size(), 2_u));
+        expect(eq(after.children.size(), 2_u));
+        expect(before.children[0].id == after.children[1].id);
+        expect(before.children[1].id == after.children[0].id);
+        expect(before.children[0].id != before.children[1].id);
+
+        const auto build_tree = [](bool expanded)
+        {
+            auto view = tree_view() | id("tree");
+            view      = std::move(view)[tree_item("Docs", "docs",
+                                                  { .depth         = 0,
+                                                    .expanded      = expanded,
+                                                    .has_children  = true,
+                                                    .toggle_action = "toggle_docs" })];
+            auto data = std::move(view).release();
+            if (const auto result = data.finalize(); !result)
+                throw std::runtime_error { result.error().what() };
+            return data;
+        };
+
+        const auto collapsed = build_tree(false);
+        const auto opened    = build_tree(true);
+        expect(collapsed.children[0].id == opened.children[0].id);
+    };
+
     "duplicate explicit ids are rejected"_test = []
     {
         auto       tree   = box()[box() | id("same"), box() | id("same")];

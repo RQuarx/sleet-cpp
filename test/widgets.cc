@@ -205,6 +205,89 @@ const boost::ut::suite widget_tests = []
         expect(tag.tint == tone::accent);
         expect(eq(tag.text, std::string { "new" }));
     };
+
+    "list views group focusable rows"_test = []
+    {
+        const auto view = list_view().data_view();
+
+        expect(view.control == control_kind::list_view);
+        expect(view.focus_group);
+        expect(view.scrollable);
+        expect(view.clip_children);
+        expect(view.size.x.is_fill());
+        expect(eq(view.size.y.get_fixed_size(), 240.F));
+
+        const auto row = list_item("Alpha", "alpha", true).data_view();
+        expect(row.control == control_kind::list_item);
+        expect(row.focusable);
+        expect(row.selected);
+        expect(eq(row.action, std::string { "alpha" }));
+        expect(eq(row.text, std::string { "Alpha" }));
+        expect(eq(row.children.size(), 1_u));
+        expect(row.children[0].is_text());
+        expect(eq(row.size.y.get_fixed_size(), 32.F));
+    };
+
+    "table rows and cells share weighted columns"_test = []
+    {
+        const auto view = table_view().data_view();
+        expect(view.control == control_kind::list_view);
+        expect(view.focus_group);
+        expect(view.scrollable);
+
+        auto header = table_header();
+        header = std::move(header)[table_header_cell("Name", 2.F), table_header_cell("Size", 1.F)];
+        const auto &header_data = header.data_view();
+        expect(eq(header_data.children.size(), 2_u));
+        expect(eq(header_data.children[0].flex, 2.F));
+        expect(eq(header_data.children[1].flex, 1.F));
+        expect(header_data.children[0].children[0].font.weight == font_weight::semibold);
+
+        const auto row = table_row("open", true).data_view();
+        expect(row.is_row());
+        expect(row.control == control_kind::list_item);
+        expect(row.selected);
+        expect(row.focusable);
+
+        const auto cell = table_cell("Alpha", 2.F).data_view();
+        expect(cell.is_box());
+        expect(cell.size.x.is_grow());
+        expect(eq(cell.flex, 2.F));
+        expect(cell.clip_children);
+        expect(cell.children[0].is_text());
+        expect(cell.children[0].wrap == text_wrap_mode::no_wrap);
+
+        // Invalid weights cannot collapse a column or poison the flex total.
+        expect(eq(table_cell("x", -1.F).data_view().flex, 0.01F));
+        expect(eq(table_cell("x", std::numeric_limits<float>::quiet_NaN()).data_view().flex, 1.F));
+    };
+
+    "tree rows expose depth and disclosure state"_test = []
+    {
+        const auto view = tree_view().data_view();
+        expect(view.control == control_kind::tree_view);
+        expect(view.focus_group);
+        expect(view.scrollable);
+
+        const auto row = (tree_item("Docs", "docs",
+                                    { .depth         = 2,
+                                      .expanded      = true,
+                                      .has_children  = true,
+                                      .toggle_action = "toggle_docs" })
+                          | selected())
+                             .data_view();
+
+        expect(row.control == control_kind::tree_item);
+        expect(row.focusable);
+        expect(row.selected);
+        expect(eq(row.tree_depth, 2));
+        expect(row.tree_expanded);
+        expect(row.tree_has_children);
+        expect(eq(row.tree_toggle_action, std::string { "toggle_docs" }));
+        expect(eq(row.text, std::string { "Docs" }));
+        expect(
+            eq(row.padding.left, tree_row_inset + (2.F * tree_indent_width) + tree_chevron_width));
+    };
 };
 
 

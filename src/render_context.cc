@@ -1131,6 +1131,10 @@ struct sleet::render_context::impl
         case widget::control_kind::radio_indicator:
             return node.checked ? theme.accent : theme.field.bg;
         case widget::control_kind::slider:
+        case widget::control_kind::list_view:
+        case widget::control_kind::list_item:
+        case widget::control_kind::tree_view:
+        case widget::control_kind::tree_item:
         case widget::control_kind::none:   break;
         }
 
@@ -1145,6 +1149,21 @@ struct sleet::render_context::impl
         -> std::optional<color>
     {
         if (node.visual.background) return node.visual.background;
+
+        // Selected rows and other selected widgets use the theme's selection
+        // color as their surface, with the same hover and press feedback as
+        // other interactive widgets. Selection wins over a semantic surface
+        // tint so a selected table row remains visible.
+        if (node.selected and theme.selection)
+        {
+            auto       fill    = *theme.selection;
+            const auto amounts = amounts_for(node);
+            if (amounts.press > 0.F)
+                fill = mix(fill, color { 0, 0, 0, 255 }, 0.18F * amounts.press);
+            else if (amounts.hover > 0.F)
+                fill = mix(fill, color { 255, 255, 255, 255 }, 0.12F * amounts.hover);
+            return fill;
+        }
 
         // A themed surface resolves its fill against the active theme so
         // callers do not need to know concrete colors.
@@ -1214,6 +1233,10 @@ struct sleet::render_context::impl
                 break;
             case widget::control_kind::combo_option: break;
             case widget::control_kind::slider:
+            case widget::control_kind::list_view:
+            case widget::control_kind::list_item:
+            case widget::control_kind::tree_view:
+            case widget::control_kind::tree_item:
             case widget::control_kind::none:         break;
             }
         }
@@ -2065,7 +2088,11 @@ struct sleet::render_context::impl
         case widget::control_kind::combo_box:
         case widget::control_kind::combo_popup:
         case widget::control_kind::combo_option:
-        case widget::control_kind::slider:       return {};
+        case widget::control_kind::slider:
+        case widget::control_kind::list_view:
+        case widget::control_kind::list_item:
+        case widget::control_kind::tree_view:
+        case widget::control_kind::tree_item:    return {};
         }
 
         return {};
@@ -2093,6 +2120,46 @@ struct sleet::render_context::impl
 
         return draw_line_aa(renderer, { center_x, center_y + half_height },
                             { center_x + half_width, center_y - half_height }, thickness, stroke);
+    }
+
+
+    [[nodiscard]]
+    auto draw_tree_chevron(const node_data &node, const rect &bounds) -> kei::result<>
+    {
+        if (!node.tree_has_children) return {};
+
+        const auto physical = to_physical(bounds);
+        if (physical.size.x <= 0.F or physical.size.y <= 0.F) return {};
+
+        const auto scale    = pixel_scale;
+        const auto left     = physical.position.x
+                            + ((widget::tree_row_inset
+                                + (static_cast<float>(node.tree_depth) * widget::tree_indent_width))
+                               * scale);
+        const auto center_x = left + ((widget::tree_chevron_width * scale) / 2.F);
+        const auto center_y = physical.center().y;
+        const auto half     = std::min(4.F * scale, physical.size.y / 3.F);
+        const auto thickness = 1.5F * scale;
+        const auto stroke    = foreground_for(node, active_colors(node));
+
+        if (node.tree_expanded)
+        {
+            if (auto res = draw_line_aa(renderer, { center_x - half, center_y - (half / 2.F) },
+                                        { center_x, center_y + (half / 2.F) }, thickness, stroke);
+                !res)
+                return res;
+
+            return draw_line_aa(renderer, { center_x, center_y + (half / 2.F) },
+                                { center_x + half, center_y - (half / 2.F) }, thickness, stroke);
+        }
+
+        if (auto res = draw_line_aa(renderer, { center_x - (half / 2.F), center_y - half },
+                                    { center_x + (half / 2.F), center_y }, thickness, stroke);
+            !res)
+            return res;
+
+        return draw_line_aa(renderer, { center_x + (half / 2.F), center_y },
+                            { center_x - (half / 2.F), center_y + half }, thickness, stroke);
     }
 
 
@@ -2440,6 +2507,9 @@ struct sleet::render_context::impl
 
         if (node.control == widget::control_kind::combo_box)
             if (auto res = draw_combo_chevron(node, *bounds); !res) return res;
+
+        if (node.control == widget::control_kind::tree_item)
+            if (auto res = draw_tree_chevron(node, *bounds); !res) return res;
 
         auto clip = std::optional<text_clip> {};
         if (node.clip_children)

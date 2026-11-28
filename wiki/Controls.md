@@ -17,7 +17,7 @@ Buttons, checkboxes, toggles, and radio buttons report their `action` in a
 | `submit` | Text input | `text` contains the submitted value; emitted on Enter (Ctrl/Cmd+Enter for a text area) |
 | `selection_changed` | Combo box | `text` contains the chosen option |
 | `slider_changed` | Slider | `value` contains the normalized value in `[0, 1]` |
-| `activate` | Button, checkbox, toggle, radio button | `action` contains the widget action |
+| `activate` | Button, checkbox, toggle, radio button, list/table/tree row | `action` contains the widget action; rows also put their label in `text` |
 
 A text input reports `text_edit` while editing and `submit` on Enter. A combo
 box reports `selection_changed` with the option text. The runtime sets the
@@ -75,10 +75,25 @@ Space chooses one, and Escape or Tab closes the list. Only one combo box is open
 at a time; opening another closes the first, and Tab returns focus to the header
 before continuing traversal.
 
+List, table, and tree rows are focusable controls inside a focus-grouped
+surface. Tab enters the surface once. Up/Down move focus, Home/End jump to the
+ends, and PageUp/PageDown move by one viewport. Enter, Space, or a click emits
+`activate` with the row action. The runtime does not change selection itself;
+rebuild the view with `selected(true)` on the row that should be selected.
+
+Tree rows also use Left/Right. Right expands a collapsed row by emitting its
+toggle action, then moves to the first child once the row is expanded. Left
+collapses an expanded row, or moves to the parent when the row is a leaf or
+already collapsed. Clicking the disclosure chevron emits the toggle action
+instead of activating the row. Rows are flat siblings whose `depth` field
+drives indentation and parent/child navigation; omit collapsed descendants from
+the view.
+
 A `focus_group()` subtree is one Tab stop. Arrow keys move focus between its
 focusable members, Home and End jump to the first and last, and Tab re-enters at
-the member that was focused last. Text inputs, sliders, and combo boxes keep
-their own arrow-key handling and are not navigated by the group while focused.
+the member that was focused last. Text inputs, sliders, combo boxes, and
+list/tree rows keep their own arrow-key handling and are not navigated by the
+group while focused.
 
 ## Pointer and disabled state
 
@@ -87,9 +102,11 @@ when the press began on the same action widget, so dragging off a button
 cancels the click. Releasing outside the window, losing focus, or a view
 rebuild that removes the pressed widget clears the drag state. Checkbox and
 radio indicators are visual parts of their parent widget, so pressing either
-the indicator or the label toggles the control. Clicking outside an open combo
-closes it, and clicking a slider starts a drag that continues until the left
-button is released. The wheel scrolls the nearest `scrollable()` ancestor.
+the indicator or the label toggles the control. List, table, and tree rows
+focus and emit `activate` on press; pressing a tree row's disclosure area emits
+its toggle action instead. Clicking outside an open combo closes it, and
+clicking a slider starts a drag that continues until the left button is
+released. The wheel scrolls the nearest `scrollable()` ancestor.
 
 `disabled()` removes a subtree from the Tab order and keyboard input, and
 prevents its widgets from becoming pointer targets. It paints the subtree with

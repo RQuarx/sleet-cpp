@@ -496,6 +496,50 @@ namespace sleet::widget
         return _impl::make_modifier([value](node_data &data) { data.checked = value; });
     }
 
+
+    /// Marks a list row, tree row, or other widget as selected. Selected
+    /// widgets paint the theme's selection color behind their content.
+    [[nodiscard]]
+    inline auto selected(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.selected = value; });
+    }
+
+
+    /// Sets the indentation depth of a tree row. Values are clamped to zero.
+    [[nodiscard]]
+    inline auto depth(int value)
+    {
+        return _impl::make_modifier([value](node_data &data)
+                                    { data.tree_depth = std::max(0, value); });
+    }
+
+
+    /// Shows or hides the children of a tree row.
+    [[nodiscard]]
+    inline auto expanded(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.tree_expanded = value; });
+    }
+
+
+    /// Declares that a tree row has children, even while they are collapsed.
+    [[nodiscard]]
+    inline auto has_children(bool value = true)
+    {
+        return _impl::make_modifier([value](node_data &data) { data.tree_has_children = value; });
+    }
+
+
+    /// Sets the action reported when a tree row is expanded or collapsed. When
+    /// empty, the row's normal action is used.
+    [[nodiscard]]
+    inline auto on_toggle(std::string action)
+    {
+        return _impl::make_modifier([action = std::move(action)](node_data &data)
+                                    { data.tree_toggle_action = std::move(action); });
+    }
+
     [[nodiscard]]
     inline auto control_value(float value)
     {

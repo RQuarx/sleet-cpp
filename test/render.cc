@@ -61,10 +61,11 @@ const boost::ut::suite render_tests = []
             return;
         }
 
-        const auto clear_color = theme.base.bg.value_or(sleet::color { 0, 0, 0, 255 });
-        const auto base_bg     = theme.base.bg.value();
-        const auto hover_bg    = theme.hover.bg.value();
-        const auto toast_bg    = theme.toast_bg.value();
+        const auto clear_color  = theme.base.bg.value_or(sleet::color { 0, 0, 0, 255 });
+        const auto base_bg      = theme.base.bg.value();
+        const auto hover_bg     = theme.hover.bg.value();
+        const auto toast_bg     = theme.toast_bg.value();
+        const auto selection_bg = theme.selection.value();
 
         try
         {
@@ -338,6 +339,64 @@ const boost::ut::suite render_tests = []
                         expect(thumb == 0xFFFFFF_rgb);
                         SDL_DestroySurface(pixels);
                     }
+                }
+            }
+
+            // Selected rows paint the theme selection color as their surface.
+            context.set_viewport({ 64.F, 64.F });
+
+            auto selected_tree
+                = to_data(box()[table_row("select", true) | id("selected-row")] | size(60.F, 40.F));
+            expect(static_cast<bool>(selected_tree.finalize()));
+
+            auto selected_layout = calculate_layout(selected_tree, measure, { 64.F, 64.F });
+            expect(static_cast<bool>(selected_layout));
+            if (selected_layout)
+            {
+                expect(static_cast<bool>(context.render(selected_tree, *selected_layout)));
+
+                auto *pixels = SDL_RenderReadPixels(renderer, nullptr);
+                expect(pixels != nullptr);
+                if (pixels != nullptr)
+                {
+                    std::uint8_t r = 0;
+                    std::uint8_t g = 0;
+                    std::uint8_t b = 0;
+                    std::uint8_t a = 0;
+                    expect(SDL_ReadSurfacePixel(pixels, 10, 10, &r, &g, &b, &a));
+                    expect(r == selection_bg.r);
+                    expect(g == selection_bg.g);
+                    expect(b == selection_bg.b);
+                    SDL_DestroySurface(pixels);
+                }
+            }
+
+            // Tree rows use the same selection surface as table rows.
+            auto selected_tree_row = to_data(
+                box()[tree_item("Selected", "select") | selected() | id("selected-tree-row")]
+                | size(60.F, 40.F));
+            expect(static_cast<bool>(selected_tree_row.finalize()));
+
+            auto selected_tree_layout
+                = calculate_layout(selected_tree_row, measure, { 64.F, 64.F });
+            expect(static_cast<bool>(selected_tree_layout));
+            if (selected_tree_layout)
+            {
+                expect(static_cast<bool>(context.render(selected_tree_row, *selected_tree_layout)));
+
+                auto *pixels = SDL_RenderReadPixels(renderer, nullptr);
+                expect(pixels != nullptr);
+                if (pixels != nullptr)
+                {
+                    std::uint8_t r = 0;
+                    std::uint8_t g = 0;
+                    std::uint8_t b = 0;
+                    std::uint8_t a = 0;
+                    expect(SDL_ReadSurfacePixel(pixels, 10, 10, &r, &g, &b, &a));
+                    expect(r == selection_bg.r);
+                    expect(g == selection_bg.g);
+                    expect(b == selection_bg.b);
+                    SDL_DestroySurface(pixels);
                 }
             }
 

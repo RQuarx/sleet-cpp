@@ -40,6 +40,18 @@ namespace
         if (node.control == sleet::widget::control_kind::combo_option and !node.text.empty())
             base += std::format("#{}", node.text);
 
+        // List and tree rows use their action as a stable identity. The action
+        // is what the application handles, so it survives reordering, filtering,
+        // and expansion changes. Fall back to the label when no action is set.
+        if (node.control == sleet::widget::control_kind::list_item
+            or node.control == sleet::widget::control_kind::tree_item)
+        {
+            if (!node.action.empty())
+                base += std::format("#{}", node.action);
+            else if (!node.text.empty())
+                base += std::format("#{}", node.text);
+        }
+
         return base;
     }
 
@@ -49,55 +61,60 @@ namespace
     template <typename Other>
     void assign_fields(node_data &self, Other &&other)
     {
-        self.id               = std::forward<Other>(other).id;
-        self.text             = std::forward<Other>(other).text;
-        self.action           = std::forward<Other>(other).action;
-        self.children         = std::forward<Other>(other).children;
-        self.name             = std::forward<Other>(other).name;
-        self.size             = std::forward<Other>(other).size;
-        self.margin           = std::forward<Other>(other).margin;
-        self.padding          = std::forward<Other>(other).padding;
-        self.origin           = std::forward<Other>(other).origin;
-        self.font             = std::forward<Other>(other).font;
-        self.wrap             = std::forward<Other>(other).wrap;
-        self.text_align       = std::forward<Other>(other).text_align;
-        self.multiline        = std::forward<Other>(other).multiline;
-        self.gap              = std::forward<Other>(other).gap;
-        self.alignment        = std::forward<Other>(other).alignment;
-        self.main_axis        = std::forward<Other>(other).main_axis;
-        self.align_self       = std::forward<Other>(other).align_self;
-        self.flex             = std::forward<Other>(other).flex;
-        self.kind             = std::forward<Other>(other).kind;
-        self.visual           = std::forward<Other>(other).visual;
-        self.visible          = std::forward<Other>(other).visible;
-        self.motion           = std::forward<Other>(other).motion;
-        self.floating         = std::forward<Other>(other).floating;
-        self.placement_anchor = std::forward<Other>(other).placement_anchor;
-        self.placement        = std::forward<Other>(other).placement;
-        self.z_index          = std::forward<Other>(other).z_index;
-        self.clip_children    = std::forward<Other>(other).clip_children;
-        self.scrollable       = std::forward<Other>(other).scrollable;
-        self.show_scrollbar   = std::forward<Other>(other).show_scrollbar;
-        self.reveal_on_focus  = std::forward<Other>(other).reveal_on_focus;
-        self.disabled         = std::forward<Other>(other).disabled;
-        self.control          = std::forward<Other>(other).control;
-        self.tint             = std::forward<Other>(other).tint;
-        self.variant          = std::forward<Other>(other).variant;
-        self.focusable        = std::forward<Other>(other).focusable;
-        self.autofocus        = std::forward<Other>(other).autofocus;
-        self.checked          = std::forward<Other>(other).checked;
-        self.control_value    = std::forward<Other>(other).control_value;
-        self.placeholder      = std::forward<Other>(other).placeholder;
-        self.tooltip_text     = std::forward<Other>(other).tooltip_text;
-        self.backdrop         = std::forward<Other>(other).backdrop;
-        self.focus_scope      = std::forward<Other>(other).focus_scope;
-        self.focus_group      = std::forward<Other>(other).focus_group;
-        self.modal            = std::forward<Other>(other).modal;
-        self.cancel_action    = std::forward<Other>(other).cancel_action;
-        self.shortcuts        = std::forward<Other>(other).shortcuts;
-        self.shortcut_error   = std::forward<Other>(other).shortcut_error;
-        self.background_tint  = std::forward<Other>(other).background_tint;
-        self.border_tint      = std::forward<Other>(other).border_tint;
+        self.id                 = std::forward<Other>(other).id;
+        self.text               = std::forward<Other>(other).text;
+        self.action             = std::forward<Other>(other).action;
+        self.children           = std::forward<Other>(other).children;
+        self.name               = std::forward<Other>(other).name;
+        self.size               = std::forward<Other>(other).size;
+        self.margin             = std::forward<Other>(other).margin;
+        self.padding            = std::forward<Other>(other).padding;
+        self.origin             = std::forward<Other>(other).origin;
+        self.font               = std::forward<Other>(other).font;
+        self.wrap               = std::forward<Other>(other).wrap;
+        self.text_align         = std::forward<Other>(other).text_align;
+        self.multiline          = std::forward<Other>(other).multiline;
+        self.gap                = std::forward<Other>(other).gap;
+        self.alignment          = std::forward<Other>(other).alignment;
+        self.main_axis          = std::forward<Other>(other).main_axis;
+        self.align_self         = std::forward<Other>(other).align_self;
+        self.flex               = std::forward<Other>(other).flex;
+        self.kind               = std::forward<Other>(other).kind;
+        self.visual             = std::forward<Other>(other).visual;
+        self.visible            = std::forward<Other>(other).visible;
+        self.motion             = std::forward<Other>(other).motion;
+        self.floating           = std::forward<Other>(other).floating;
+        self.placement_anchor   = std::forward<Other>(other).placement_anchor;
+        self.placement          = std::forward<Other>(other).placement;
+        self.z_index            = std::forward<Other>(other).z_index;
+        self.clip_children      = std::forward<Other>(other).clip_children;
+        self.scrollable         = std::forward<Other>(other).scrollable;
+        self.show_scrollbar     = std::forward<Other>(other).show_scrollbar;
+        self.reveal_on_focus    = std::forward<Other>(other).reveal_on_focus;
+        self.disabled           = std::forward<Other>(other).disabled;
+        self.control            = std::forward<Other>(other).control;
+        self.tint               = std::forward<Other>(other).tint;
+        self.variant            = std::forward<Other>(other).variant;
+        self.focusable          = std::forward<Other>(other).focusable;
+        self.autofocus          = std::forward<Other>(other).autofocus;
+        self.checked            = std::forward<Other>(other).checked;
+        self.selected           = std::forward<Other>(other).selected;
+        self.tree_depth         = std::forward<Other>(other).tree_depth;
+        self.tree_expanded      = std::forward<Other>(other).tree_expanded;
+        self.tree_has_children  = std::forward<Other>(other).tree_has_children;
+        self.tree_toggle_action = std::forward<Other>(other).tree_toggle_action;
+        self.control_value      = std::forward<Other>(other).control_value;
+        self.placeholder        = std::forward<Other>(other).placeholder;
+        self.tooltip_text       = std::forward<Other>(other).tooltip_text;
+        self.backdrop           = std::forward<Other>(other).backdrop;
+        self.focus_scope        = std::forward<Other>(other).focus_scope;
+        self.focus_group        = std::forward<Other>(other).focus_group;
+        self.modal              = std::forward<Other>(other).modal;
+        self.cancel_action      = std::forward<Other>(other).cancel_action;
+        self.shortcuts          = std::forward<Other>(other).shortcuts;
+        self.shortcut_error     = std::forward<Other>(other).shortcut_error;
+        self.background_tint    = std::forward<Other>(other).background_tint;
+        self.border_tint        = std::forward<Other>(other).border_tint;
     }
 }
 

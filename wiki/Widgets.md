@@ -27,6 +27,13 @@ Built-in widgets are thin compositions of those primitives:
 | `radio_button(text, selected, action)` | Labeled radio button |
 | `slider(value, action)` | Horizontal slider with a normalized value |
 | `progress_bar(value, height)` | Horizontal progress indicator |
+| `list_view()` | Scrollable, focus-grouped list surface |
+| `list_item(text, action, selected)` | Selectable list row |
+| `table_view()` | Scrollable table surface |
+| `table_header()`, `table_row(action, selected)` | Header and selectable data rows |
+| `table_cell(text, weight)`, `table_header_cell(text, weight)` | Weighted table columns |
+| `tree_view()` | Scrollable, focus-grouped tree surface |
+| `tree_item(text, action, options)` | Selectable row with depth and disclosure state |
 | `separator()` | One-pixel horizontal rule |
 | `spacer()` | Flexible blank area |
 | `badge("text")` | Compact accent-colored label |
@@ -59,6 +66,69 @@ column()[text_input(current.name, "name", "Type your name..."),
 Buttons accept four visual weights through `button_variant`: `standard`,
 `primary`, `ghost`, and `danger`. The `button(node_data, action, ...)`
 overload allows custom content such as a row of labels and badges.
+
+## Lists, tables, and trees
+
+Lists and tables are scrollable, focus-grouped surfaces. The application owns
+the data and the selected value; the runtime owns focus, scrolling, and
+keyboard navigation. Rebuild the rows from state each frame and mark the
+selected row with `selected(true)`:
+
+```cpp
+auto rows = list_view() | width(260.F) | height(220.F);
+for (const auto &item : current.items)
+    rows = std::move(rows)[list_item(item.name, item.action,
+                                     item.action == current.selected)];
+```
+
+Rows are focusable controls. Tab enters the list once, Up/Down move focus,
+Home/End jump to the ends, and PageUp/PageDown move by a viewport. Enter, Space,
+or a click emits `event::kind::activate` with the row's action. The runtime does
+not change `selected` itself, so `on_update` decides what activation means and
+the next view paints the new selection. `list_item(node_data, action, selected)`
+accepts arbitrary row content.
+
+A table uses the same row behavior and adds weighted columns:
+
+```cpp
+auto table = table_view() | height(220.F);
+table = std::move(table)[table_header()[table_header_cell("Name", 2.F),
+                                         table_header_cell("Size", 1.F)]];
+for (const auto &file : current.files)
+{
+    auto row = table_row(file.action, file.action == current.selected);
+    row = std::move(row)[table_cell(file.name, 2.F), table_cell(file.size, 1.F)];
+    table = std::move(table)[std::move(row)];
+}
+```
+
+Header and data cells must use matching weights. The table surface paints a
+one-pixel gap between rows, so header and row backgrounds read as a grid.
+
+Trees keep their rows as flat siblings and describe the hierarchy with `depth`.
+Include only the rows that are currently visible; collapsing a parent simply
+omits its descendants:
+
+```cpp
+auto tree = tree_view() | height(240.F);
+tree = std::move(tree)[
+    tree_item("Documents", "docs") | depth(0) | has_children()
+        | expanded(current.docs_open) | on_toggle("toggle_docs")];
+
+if (current.docs_open)
+    tree = std::move(tree)[tree_item("Guide", "guide") | depth(1),
+                           tree_item("API", "api") | depth(1)];
+```
+
+Right expands a collapsed row or moves to its first child; Left collapses an
+expanded row or moves to its parent. Clicking the disclosure chevron emits the
+toggle action instead of activating the row. `tree_item` also accepts a
+`tree_item_options` value with `depth`, `expanded`, `has_children`, and
+`toggle_action` fields.
+
+Row ids are derived from their actions, so reordering or filtering rows keeps
+focus and scroll state attached to the right item. When several rows share an
+action, give each one an explicit `key(...)`.
 
 ## Modifiers
 
@@ -102,6 +172,8 @@ box()[label("Hello")]
 | `tone_of(tone)`, `variant(button_variant)` | Resolve semantic colors from the theme |
 | `background_of(tone)`, `border_of(tone)` | Fill or outline using a theme tone |
 | `control(kind)`, `checked(bool)`, `control_value(float)`, `placeholder(text)` | Control metadata; built-in widgets set these for you |
+| `selected(bool)` | Paint the theme selection color behind a row or other widget |
+| `depth(int)`, `expanded(bool)`, `has_children(bool)`, `on_toggle("action")` | Tree row indentation, disclosure state, and toggle action |
 | `transition(seconds, curve)`, `no_transition()` | Ease hover, press, and focus feedback; `no_transition()` opts out |
 | `tooltip("text")` | Show a tooltip after the pointer rests on the node or a descendant |
 | `backdrop(bool)` | Fill the parent content box and paint the theme scrim |
@@ -128,8 +200,10 @@ their targets.
 
 Nodes without an explicit id receive a generated id from their kind, name, call
 site, and per-parent occurrence. The call site is part of the key, so inserting
-an unrelated sibling does not renumber existing widgets. See [[Layout]] for
-overlay and scrolling rules.
+an unrelated sibling does not renumber existing widgets. Combo options add
+their label, and list or tree rows add their action, so reordering those
+collections does not detach focus or scroll state. See [[Layout]] for overlay
+and scrolling rules.
 
 ## Shortcuts and focus
 

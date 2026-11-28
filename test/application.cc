@@ -2278,6 +2278,269 @@ const boost::ut::suite modal_hit_tests = []
         expect(eq(observed.closes, 1));
         expect(!observed.menu_open);
     };
+
+    "list rows navigate with arrows and activate with Enter"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+            std::string active;
+            int         activations = 0;
+        };
+
+        struct message
+        { std::string action; };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto result
+            = app { "sleet-list-test", 320, 240, std::move(theme) }
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message {} }; })
+                  .on_update(
+                      [](state &current, const message &value) -> kei::result<>
+                      {
+                          if (value.action.empty()) return {};
+                          current.active = value.action;
+                          current.activations++;
+                          return {};
+                      })
+                  .on_view(
+                      [&observed](const state &current)
+                      {
+                          observed = current;
+
+                          auto view = list_view() | width(200.F);
+                          view = std::move(view)[list_item("One", "one"), list_item("Two", "two"),
+                                                 list_item("Three", "three")];
+                          return view;
+                      })
+                  .on_event(
+                      [](const sleet::event &input) -> std::optional<message>
+                      {
+                          if (input.type == sleet::event::kind::activate and !input.action.empty())
+                              return message { input.action };
+                          return std::nullopt;
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1:  push_key(SDLK_TAB); break;
+                          case 2:  push_key(SDLK_END); break;
+                          case 3:  push_key(SDLK_HOME); break;
+                          case 4:  push_key(SDLK_PAGEDOWN); break;
+                          case 5:  push_key(SDLK_PAGEUP); break;
+                          case 6:  push_key(SDLK_DOWN); break;
+                          case 7:  push_key(SDLK_RETURN); break;
+                          case 8:  push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.activations, 1));
+        expect(eq(observed.active, std::string { "two" }));
+    };
+
+    "tree rows expand, collapse, and move by depth"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+            bool        docs_open = false;
+            int         toggles   = 0;
+            std::string active;
+        };
+
+        struct message
+        { std::string action; };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto result
+            = app { "sleet-tree-test", 320, 240, std::move(theme) }
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message {} }; })
+                  .on_update(
+                      [](state &current, const message &value) -> kei::result<>
+                      {
+                          if (value.action == "toggle_docs")
+                          {
+                              current.docs_open = !current.docs_open;
+                              current.toggles++;
+                          }
+                          else if (!value.action.empty())
+                              current.active = value.action;
+                          return {};
+                      })
+                  .on_view(
+                      [&observed](const state &current)
+                      {
+                          observed = current;
+
+                          auto view = tree_view() | width(240.F) | height(180.F);
+                          view = std::move(view)[tree_item("Docs", "docs",
+                                                           { .depth         = 0,
+                                                             .expanded      = current.docs_open,
+                                                             .has_children  = true,
+                                                             .toggle_action = "toggle_docs" })];
+
+                          if (current.docs_open)
+                              view = std::move(view)[tree_item("Guide", "guide",
+                                                               { .depth         = 1,
+                                                                 .expanded      = false,
+                                                                 .has_children  = false,
+                                                                 .toggle_action = {} }),
+                                                     tree_item("API", "api",
+                                                               { .depth         = 1,
+                                                                 .expanded      = false,
+                                                                 .has_children  = false,
+                                                                 .toggle_action = {} })];
+                          return view;
+                      })
+                  .on_event(
+                      [](const sleet::event &input) -> std::optional<message>
+                      {
+                          if (input.type == sleet::event::kind::activate and !input.action.empty())
+                              return message { input.action };
+                          return std::nullopt;
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1:  push_key(SDLK_TAB); break;
+                          case 2:  push_key(SDLK_RIGHT); break;
+                          case 3:  push_key(SDLK_RIGHT); break;
+                          case 4:  push_key(SDLK_DOWN); break;
+                          case 5:  push_key(SDLK_UP); break;
+                          case 6:  push_key(SDLK_RETURN); break;
+                          case 7:  push_key(SDLK_LEFT); break;
+                          case 8:  push_key(SDLK_LEFT); break;
+                          case 9:  push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.toggles, 2));
+        expect(eq(observed.active, std::string { "guide" }));
+        expect(!observed.docs_open);
+    };
+
+    "clicking a tree disclosure toggles instead of activating"_test = []
+    {
+        using namespace sleet::widget;
+
+        auto theme = theme::default_dark();
+        if (theme.fonts.face(font_role::body).path.empty()) return;
+
+        struct state
+        {
+            bool        docs_open = false;
+            int         toggles   = 0;
+            std::string active;
+        };
+
+        struct message
+        { std::string action; };
+
+        using app = sleet::application<state, message>;
+
+        auto observed = state {};
+        auto frame    = 0;
+
+        auto result
+            = app { "sleet-tree-pointer-test", 320, 240, std::move(theme) }
+                  .on_boot([]() -> kei::result<std::pair<state, message>>
+                           { return std::pair { state {}, message {} }; })
+                  .on_update(
+                      [](state &current, const message &value) -> kei::result<>
+                      {
+                          if (value.action == "toggle_docs")
+                          {
+                              current.docs_open = !current.docs_open;
+                              current.toggles++;
+                          }
+                          else if (!value.action.empty())
+                              current.active = value.action;
+                          return {};
+                      })
+                  .on_view(
+                      [&observed](const state &current)
+                      {
+                          observed = current;
+
+                          auto view = tree_view() | width(200.F) | height(120.F);
+                          view = std::move(view)[tree_item("Docs", "docs",
+                                                           { .depth         = 0,
+                                                             .expanded      = current.docs_open,
+                                                             .has_children  = true,
+                                                             .toggle_action = "toggle_docs" })];
+
+                          if (current.docs_open)
+                              view = std::move(view)[tree_item("Guide", "guide",
+                                                               { .depth         = 1,
+                                                                 .expanded      = false,
+                                                                 .has_children  = false,
+                                                                 .toggle_action = {} })];
+                          return view;
+                      })
+                  .on_event(
+                      [](const sleet::event &input) -> std::optional<message>
+                      {
+                          if (input.type == sleet::event::kind::activate and !input.action.empty())
+                              return message { input.action };
+                          return std::nullopt;
+                      })
+                  .on_subscription(
+                      [&frame]() -> std::optional<message>
+                      {
+                          switch (++frame)
+                          {
+                          case 1:
+                              push_mouse(true, 15.F, 19.F);
+                              push_mouse(false, 15.F, 19.F);
+                              break;
+                          case 2:
+                              push_mouse(true, 100.F, 19.F);
+                              push_mouse(false, 100.F, 19.F);
+                              break;
+                          case 3:  push_quit(); break;
+                          default: break;
+                          }
+
+                          return std::nullopt;
+                      })
+                  .run();
+
+        expect(eq(result, 0));
+        expect(eq(observed.toggles, 1));
+        expect(eq(observed.active, std::string { "docs" }));
+    };
 };
 
 
