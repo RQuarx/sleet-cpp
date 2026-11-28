@@ -87,6 +87,18 @@ namespace sleet::widget
     }
 
 
+    /// Sets the starting size a growing or filling node contributes on the
+    /// parent's main axis. A zero basis makes sibling weights divide the
+    /// available space directly, which keeps table columns aligned.
+    [[nodiscard]]
+    inline auto flex_basis(float value)
+    {
+        return _impl::make_modifier(
+            [value](node_data &data)
+            { data.flex_basis = std::isfinite(value) ? std::max(0.F, value) : 0.F; });
+    }
+
+
     [[nodiscard]]
     inline auto width(float px)
     {
@@ -507,11 +519,19 @@ namespace sleet::widget
 
 
     /// Sets the indentation depth of a tree row. Values are clamped to zero.
+    /// The content inset follows the depth so labels stay in the same column
+    /// as the disclosure chevron.
     [[nodiscard]]
     inline auto depth(int value)
     {
-        return _impl::make_modifier([value](node_data &data)
-                                    { data.tree_depth = std::max(0, value); });
+        return _impl::make_modifier(
+            [value](node_data &data)
+            {
+                const auto next   = std::max(0, value);
+                const auto delta  = static_cast<float>(next - data.tree_depth) * tree_indent_width;
+                data.padding.left = std::max(0.F, data.padding.left + delta);
+                data.tree_depth   = next;
+            });
     }
 
 

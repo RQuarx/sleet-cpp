@@ -79,6 +79,7 @@ namespace
         self.main_axis          = std::forward<Other>(other).main_axis;
         self.align_self         = std::forward<Other>(other).align_self;
         self.flex               = std::forward<Other>(other).flex;
+        self.flex_basis         = std::forward<Other>(other).flex_basis;
         self.kind               = std::forward<Other>(other).kind;
         self.visual             = std::forward<Other>(other).visual;
         self.visible            = std::forward<Other>(other).visible;

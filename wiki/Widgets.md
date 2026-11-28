@@ -102,8 +102,10 @@ for (const auto &file : current.files)
 }
 ```
 
-Header and data cells must use matching weights. The table surface paints a
-one-pixel gap between rows, so header and row backgrounds read as a grid.
+Header and data cells must use matching weights. Cells start from a zero flex
+basis, so every row divides the width by the same weights and the columns line
+up regardless of text length. The table surface paints a one-pixel gap between
+rows, so header and row backgrounds read as a grid.
 
 Trees keep their rows as flat siblings and describe the hierarchy with `depth`.
 Include only the rows that are currently visible; collapsing a parent simply
@@ -122,9 +124,10 @@ if (current.docs_open)
 
 Right expands a collapsed row or moves to its first child; Left collapses an
 expanded row or moves to its parent. Clicking the disclosure chevron emits the
-toggle action instead of activating the row. `tree_item` also accepts a
-`tree_item_options` value with `depth`, `expanded`, `has_children`, and
-`toggle_action` fields.
+toggle action instead of activating the row. The `depth(n)` modifier sets both
+the hierarchy level and the row's content inset, so labels stay aligned with
+their disclosure column. `tree_item` also accepts a `tree_item_options` value
+with `depth`, `expanded`, `has_children`, and `toggle_action` fields.
 
 Row ids are derived from their actions, so reordering or filtering rows keeps
 focus and scroll state attached to the right item. When several rows share an
@@ -147,6 +150,7 @@ box()[label("Hello")]
 | `width`, `height`, `size` | Fixed or `sizing` values |
 | `hexpand`, `vexpand` | `sizing::fill` on one axis |
 | `flex(weight)` | Relative share when growing or filling |
+| `flex_basis(px)` | Starting main-axis size for growing or filling; zero divides space purely by weight |
 | `margin`, `padding` | `math::edge_insets` values |
 | `gap(px)` | Space between row/column children |
 | `halign`, `valign` | Child alignment inside a box |

@@ -22,15 +22,17 @@ const boost::ut::suite node_tests = []
     "copy and move preserve every layout field"_test = []
     {
         auto original = box()[column()[label("hello") | margin(2.F)] | gap(3.F)] | gap(7.F)
-                      | padding(5.F) | margin(1.F) | flex(2.F) | text_wrap(text_wrap_mode::no_wrap)
-                      | text_align(text_alignment::right) | autofocus() | focus_group()
-                      | on_shortcut(SDLK_S, SDL_KMOD_CTRL, "save");
+                      | padding(5.F) | margin(1.F) | flex(2.F) | flex_basis(0.F)
+                      | text_wrap(text_wrap_mode::no_wrap) | text_align(text_alignment::right)
+                      | autofocus() | focus_group() | on_shortcut(SDLK_S, SDL_KMOD_CTRL, "save");
 
         const auto data = std::move(original).release();
         expect(eq(data.gap, 7.F));
         expect(eq(data.padding.top, 5.F));
         expect(eq(data.margin.left, 1.F));
         expect(eq(data.flex, 2.F));
+        expect(data.flex_basis.has_value());
+        if (data.flex_basis) expect(eq(*data.flex_basis, 0.F));
         expect(data.wrap == text_wrap_mode::no_wrap);
         expect(data.text_align == text_alignment::right);
         expect(data.autofocus);
@@ -47,6 +49,8 @@ const boost::ut::suite node_tests = []
         auto copy = data;
         expect(eq(copy.gap, 7.F));
         expect(eq(copy.padding.top, 5.F));
+        expect(copy.flex_basis.has_value());
+        if (copy.flex_basis) expect(eq(*copy.flex_basis, 0.F));
         expect(copy.children[0].parent == &copy);
         expect(eq(copy.children[0].gap, 3.F));
         expect(copy.wrap == text_wrap_mode::no_wrap);
@@ -57,6 +61,8 @@ const boost::ut::suite node_tests = []
 
         auto moved = std::move(copy);
         expect(eq(moved.gap, 7.F));
+        expect(moved.flex_basis.has_value());
+        if (moved.flex_basis) expect(eq(*moved.flex_basis, 0.F));
         expect(moved.children[0].parent == &moved);
         expect(moved.wrap == text_wrap_mode::no_wrap);
         expect(moved.text_align == text_alignment::right);

@@ -252,7 +252,10 @@ const boost::ut::suite widget_tests = []
         const auto cell = table_cell("Alpha", 2.F).data_view();
         expect(cell.is_box());
         expect(cell.size.x.is_grow());
+        expect(cell.size.y.is_fill());
         expect(eq(cell.flex, 2.F));
+        expect(cell.flex_basis.has_value());
+        if (cell.flex_basis) expect(eq(*cell.flex_basis, 0.F));
         expect(cell.clip_children);
         expect(cell.children[0].is_text());
         expect(cell.children[0].wrap == text_wrap_mode::no_wrap);
@@ -287,6 +290,25 @@ const boost::ut::suite widget_tests = []
         expect(eq(row.text, std::string { "Docs" }));
         expect(
             eq(row.padding.left, tree_row_inset + (2.F * tree_indent_width) + tree_chevron_width));
+    };
+
+    "depth modifier keeps tree content in its column"_test = []
+    {
+        const auto row = (tree_item("Child", "child") | depth(2)).data_view();
+        expect(eq(row.tree_depth, 2));
+        expect(
+            eq(row.padding.left, tree_row_inset + (2.F * tree_indent_width) + tree_chevron_width));
+
+        // Repeated and decreasing depths move the inset by the difference
+        // only, so modifiers stay idempotent.
+        const auto shallower = (tree_item("Child", "child") | depth(2) | depth(1)).data_view();
+        expect(eq(shallower.tree_depth, 1));
+        expect(eq(shallower.padding.left, tree_row_inset + tree_indent_width + tree_chevron_width));
+
+        const auto deeper = (tree_item("Child", "child") | depth(1) | depth(3)).data_view();
+        expect(eq(deeper.tree_depth, 3));
+        expect(eq(deeper.padding.left,
+                  tree_row_inset + (3.F * tree_indent_width) + tree_chevron_width));
     };
 };
 

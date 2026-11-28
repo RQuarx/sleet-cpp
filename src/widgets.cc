@@ -351,7 +351,8 @@ auto sleet::widget::table_cell(std::string text, float weight, std::source_locat
 {
     return box(origin)[label(std::move(text), origin) | hexpand() | align_self(align::center)
                        | text_wrap(text_wrap_mode::no_wrap)]
-         | width(sizing::grow()) | flex(column_weight(weight)) | padding(6.F, 8.F) | clip();
+         | width(sizing::grow()) | height(sizing::fill()) | flex(column_weight(weight))
+         | flex_basis(0.F) | padding(6.F, 8.F) | clip();
 }
 
 
@@ -360,7 +361,8 @@ auto sleet::widget::table_header_cell(std::string text, float weight, std::sourc
 {
     return box(origin)[label(std::move(text), origin) | hexpand() | align_self(align::center)
                        | text_wrap(text_wrap_mode::no_wrap) | text_weight(font_weight::semibold)]
-         | width(sizing::grow()) | flex(column_weight(weight)) | padding(6.F, 8.F) | clip();
+         | width(sizing::grow()) | height(sizing::fill()) | flex(column_weight(weight))
+         | flex_basis(0.F) | padding(6.F, 8.F) | clip();
 }
 
 
@@ -378,14 +380,16 @@ auto sleet::widget::tree_item(node_data            content,
                               std::source_location origin) -> tree_item_node
 {
     const auto row_depth = std::max(0, options.depth);
-    const auto indent
-        = tree_row_inset + (static_cast<float>(row_depth) * tree_indent_width) + tree_chevron_width;
+
+    // The depth modifier adds one indent step per level. Seed the base inset
+    // here so both the options and modifier paths produce the same padding.
+    const auto base_indent = tree_row_inset + tree_chevron_width;
 
     return box(origin)[std::move(content)] | width(sizing::fill()) | height(30.F)
-         | padding(math::edge_insets { 5.F, 10.F, 5.F, indent }) | control(control_kind::tree_item)
-         | focusable() | on_click(std::move(action)) | depth(row_depth) | expanded(options.expanded)
-         | has_children(options.has_children) | on_toggle(std::move(options.toggle_action))
-         | radius(4.F) | transition(0.1F);
+         | padding(math::edge_insets { 5.F, 10.F, 5.F, base_indent })
+         | control(control_kind::tree_item) | focusable() | on_click(std::move(action))
+         | depth(row_depth) | expanded(options.expanded) | has_children(options.has_children)
+         | on_toggle(std::move(options.toggle_action)) | radius(4.F) | transition(0.1F);
 }
 
 

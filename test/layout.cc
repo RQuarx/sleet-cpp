@@ -137,6 +137,63 @@ const boost::ut::suite layout_tests = []
         expect(eq(b->position.x, 50.F));
     };
 
+    "zero flex basis keeps weighted columns aligned"_test = []
+    {
+        const auto cell = [](std::string text, float weight, std::string key_name)
+        {
+            return box()[label(std::move(text))] | width(sizing::grow()) | flex(weight)
+                 | flex_basis(0.F) | id(std::move(key_name));
+        };
+
+        auto table = column()[row()[cell("a", 2.F, "short-name"), cell("1", 1.F, "short-value")]
+                                  | width(sizing::fill()) | height(30.F),
+                              row()[cell("a very long name", 2.F, "long-name"),
+                                    cell("2", 1.F, "long-value")]
+                                  | width(sizing::fill()) | height(30.F)]
+                   | size(300.F, 100.F);
+
+        const auto  result      = layout_of(table);
+        const auto *short_name  = result.find("short-name");
+        const auto *short_value = result.find("short-value");
+        const auto *long_name   = result.find("long-name");
+        const auto *long_value  = result.find("long-value");
+        expect(short_name != nullptr);
+        expect(short_value != nullptr);
+        expect(long_name != nullptr);
+        expect(long_value != nullptr);
+        if (short_name == nullptr or short_value == nullptr or long_name == nullptr
+            or long_value == nullptr)
+            return;
+
+        // Both rows divide the full width by weight instead of starting from
+        // their own text width, so the second column starts at the same x.
+        expect(eq(short_name->size.x, 200.F));
+        expect(eq(long_name->size.x, 200.F));
+        expect(eq(short_value->position.x, 200.F));
+        expect(eq(long_value->position.x, 200.F));
+        expect(eq(short_value->size.x, 100.F));
+        expect(eq(long_value->size.x, 100.F));
+    };
+
+    "depth modifier aligns tree labels by column"_test = []
+    {
+        auto root_content  = label("Root") | id("root-label");
+        auto child_content = label("Child") | id("child-label");
+
+        auto tree = tree_view() | size(300.F, 200.F);
+        tree      = std::move(
+            tree)[tree_item(to_data(std::move(root_content)), "root") | id("root"),
+                       tree_item(to_data(std::move(child_content)), "child") | id("child") | depth(1)];
+
+        const auto  result      = layout_of(tree);
+        const auto *root_label  = result.find("root-label");
+        const auto *child_label = result.find("child-label");
+        expect(root_label != nullptr);
+        expect(child_label != nullptr);
+        if (root_label != nullptr and child_label != nullptr)
+            expect(eq(child_label->position.x - root_label->position.x, tree_indent_width));
+    };
+
     "expand modifiers stretch on the cross axis"_test = []
     {
         auto tree = row()[box() | id("child") | width(20.F) | vexpand()] | size(200.F, 100.F);

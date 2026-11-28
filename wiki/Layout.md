@@ -28,9 +28,12 @@ auto layout = sleet::widget::calculate_layout(
 
 Fixed sizes include padding. `flex` controls the relative share of positive
 free space. If free space is negative, flexible children shrink by the same
-proportion. `hexpand` and `vexpand` use `sizing::fill`, so they stretch the
-requested axis when the parent has a definite size, whether that axis is the
-main or cross axis.
+proportion. `flex_basis(px)` overrides the intrinsic size a flexible child
+starts from; `flex_basis(0.F)` divides the available space purely by weight,
+which keeps table columns aligned across rows with different content lengths.
+`hexpand` and `vexpand` use `sizing::fill`, so they stretch the requested axis
+when the parent has a definite size, whether that axis is the main or cross
+axis.
 
 ## Text
 

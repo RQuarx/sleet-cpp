@@ -364,6 +364,9 @@ namespace
                 const auto main_size = child.size[static_cast<std::size_t>(m_main)];
                 if (main_size.is_fixed())
                     m_sizes[i][static_cast<std::size_t>(m_main)] = main_size.get_fixed_size();
+                else if (!m_main_fit and child.flex_basis
+                         and (main_size.is_grow() or main_size.is_fill()))
+                    m_sizes[i][static_cast<std::size_t>(m_main)] = clamp0(*child.flex_basis);
 
                 const auto cross_size = child.size[static_cast<std::size_t>(m_cross)];
                 if (cross_size.is_fixed())

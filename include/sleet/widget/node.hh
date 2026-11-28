@@ -114,6 +114,12 @@ namespace sleet::widget
         /// \c fill.
         float flex = 1.F;
 
+        /// Overrides the intrinsic starting size that a growing or filling
+        /// node contributes on the parent's main axis. \c std::nullopt keeps
+        /// the intrinsic size. A zero basis makes sibling weights divide the
+        /// available space directly, which keeps table columns aligned.
+        std::optional<float> flex_basis;
+
         node_kind kind = node_kind::box;
         style     visual;
         bool      visible = true;
